@@ -311,7 +311,7 @@ pub fn track(session_id: &str, pid: u32) -> Result<()> {
         let mut sys = System::new_with_specifics(
             RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
         );
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
         sys.process(sysinfo::Pid::from_u32(pid))
             .map(|p| p.start_time())
     };
@@ -382,7 +382,7 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
             let mut failed = 0;
             for pid in &pids_to_clean {
                 let st = start_time_map.get(pid).copied().flatten();
-                match kill_process(*pid, st, sigterm_timeout) {
+                match crate::kill::kill_process_with_sys(&mut sys, *pid, st, sigterm_timeout) {
                     Ok(_) => killed += 1,
                     Err(e) => {
                         failed += 1;
@@ -511,7 +511,7 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
                 let mut failed = 0;
                 for pid in &pids_to_clean {
                     let st = start_time_map.get(pid).copied().flatten();
-                    match kill_process(*pid, st, sigterm_timeout) {
+                    match crate::kill::kill_process_with_sys(&mut sys, *pid, st, sigterm_timeout) {
                         Ok(_) => killed += 1,
                         Err(e) => {
                             failed += 1;
@@ -593,12 +593,6 @@ fn find_descendant_pids(sys: &System, parent_pids: &[u32]) -> Vec<u32> {
     }
 
     result
-}
-
-/// Kill a process using shared kill logic with configurable timeout
-fn kill_process(pid: u32, start_time: Option<u64>, sigterm_timeout: u64) -> Result<()> {
-    crate::kill::kill_process(pid, start_time, sigterm_timeout)?;
-    Ok(())
 }
 
 #[cfg(test)]

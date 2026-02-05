@@ -154,23 +154,63 @@ pub fn show_logs(follow: bool, lines: u64) -> Result<()> {
 
     let latest_log = &log_files[0];
 
+    // Read last N lines using ring buffer
+    let file = fs::File::open(latest_log)
+        .with_context(|| format!("Failed to open log file: {}", latest_log.display()))?;
+    let reader = std::io::BufReader::new(&file);
+
+    use std::io::BufRead;
+    use std::collections::VecDeque;
+
+    let max_lines = lines as usize;
+    let mut last_lines: VecDeque<String> = VecDeque::with_capacity(max_lines + 1);
+
+    for line in reader.lines() {
+        match line {
+            Ok(l) => {
+                last_lines.push_back(l);
+                if last_lines.len() > max_lines {
+                    last_lines.pop_front();
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    for line in &last_lines {
+        println!("{line}");
+    }
+
     if follow {
-        // Use tail -f for following
-        std::process::Command::new("tail")
-            .arg("-f")
-            .arg("-n")
-            .arg(lines.to_string())
-            .arg(latest_log)
-            .status()
-            .with_context(|| format!("Failed to tail log file: {}", latest_log.display()))?;
-    } else {
-        // Use tail for static output
-        std::process::Command::new("tail")
-            .arg("-n")
-            .arg(lines.to_string())
-            .arg(latest_log)
-            .status()
-            .with_context(|| format!("Failed to read log file: {}", latest_log.display()))?;
+        use std::io::{Seek, SeekFrom};
+
+        // Get current file size as our starting position
+        let mut file = fs::File::open(latest_log)
+            .with_context(|| format!("Failed to open log file for following: {}", latest_log.display()))?;
+        file.seek(SeekFrom::End(0))?;
+
+        let mut reader = std::io::BufReader::new(file);
+
+        println!("--- Following {} (Ctrl+C to stop) ---", latest_log.display());
+
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    // No new data, wait and retry
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Ok(_) => {
+                    // Remove trailing newline for consistent output
+                    let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                    println!("{trimmed}");
+                }
+                Err(e) => {
+                    eprintln!("Error reading log file: {e}");
+                    break;
+                }
+            }
+        }
     }
 
     Ok(())

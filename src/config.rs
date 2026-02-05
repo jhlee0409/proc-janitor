@@ -465,8 +465,9 @@ fn detect_orphan_categories() -> Vec<(String, Vec<String>, usize)> {
 
 /// Write config file and validate
 fn write_config(path: &std::path::Path, content: &str) -> Result<()> {
-    crate::util::check_not_symlink(path)?;
-    fs::write(path, content)
+    use std::io::Write;
+    let mut file = crate::util::open_nofollow_write(path)?;
+    file.write_all(content.as_bytes())
         .with_context(|| format!("Failed to write config file: {}", path.display()))?;
 
     // Validate
@@ -576,8 +577,9 @@ pub fn edit() -> Result<()> {
         let default_targets = &["node.*claude", "claude", "node.*mcp"];
         let default_whitelist = &["node.*server", "pm2"];
         let content = render_template(default_targets, default_whitelist)?;
-        crate::util::check_not_symlink(&path)?;
-        fs::write(&path, content)
+        use std::io::Write;
+        let mut file = crate::util::open_nofollow_write(&path)?;
+        file.write_all(content.as_bytes())
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
     }
 

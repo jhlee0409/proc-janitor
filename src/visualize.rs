@@ -452,9 +452,9 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         .values()
         .map(|s| {
             serde_json::json!({
-                "id": s.id,
-                "name": s.name.as_deref().unwrap_or(""),
-                "source": s.source.to_string(),
+                "id": escape_html(&s.id),
+                "name": escape_html(s.name.as_deref().unwrap_or("")),
+                "source": escape_html(&s.source.to_string()),
                 "pids": s.pids.iter().map(|tp| tp.pid).collect::<Vec<u32>>(),
                 "created": s.created_at.format("%Y-%m-%d %H:%M:%S").to_string()
             }).to_string()
@@ -830,7 +830,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
                 .iter()
                 .map(|n| serde_json::json!({
                     "pid": n.pid,
-                    "name": n.name,
+                    "name": escape_html(&n.name),
                     "memory": n.memory_mb
                 }).to_string())
                 .collect::<Vec<_>>()
@@ -850,8 +850,9 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
     } else {
         anyhow::bail!("Cannot determine parent directory for dashboard output path");
     }
-    crate::util::check_not_symlink(&output_path)?;
-    fs::write(&output_path, html)?;
+    use std::io::Write;
+    let mut file = crate::util::open_nofollow_write(&output_path)?;
+    file.write_all(html.as_bytes())?;
 
     Ok(output_path)
 }
@@ -901,12 +902,19 @@ pub fn open_dashboard(live: bool, interval: u64) -> Result<()> {
 
         let running = Arc::new(AtomicBool::new(true));
         let r = Arc::clone(&running);
-        ctrlc::set_handler(move || {
+
+        // Try to set Ctrl+C handler. This can fail if another component has already
+        // registered a handler (ctrlc crate only allows one global handler).
+        // In practice, dashboard and daemon run in separate processes, so this is rare.
+        let handler_set = ctrlc::set_handler(move || {
             r.store(false, Ordering::SeqCst);
         })
-        .unwrap_or_else(|e| {
-            eprintln!("Warning: Could not set Ctrl+C handler: {e}. Use 'kill' to stop live mode.");
-        });
+        .is_ok();
+
+        if !handler_set {
+            eprintln!("Warning: Could not set Ctrl+C handler (already registered by another component).");
+            eprintln!("  Live mode will stop automatically. Use 'kill' to force stop.");
+        }
 
         println!(
             "Live mode: refreshing every {interval}s. Press Ctrl+C to stop."
@@ -924,4 +932,137 @@ pub fn open_dashboard(live: bool, interval: u64) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_html_basic() {
+        assert_eq!(escape_html("<script>"), "&lt;script&gt;");
+        assert_eq!(escape_html("a & b"), "a &amp; b");
+        assert_eq!(escape_html("\"quoted\""), "&quot;quoted&quot;");
+        assert_eq!(escape_html("it's"), "it&#x27;s");
+    }
+
+    #[test]
+    fn test_escape_html_no_change() {
+        assert_eq!(escape_html("hello world"), "hello world");
+        assert_eq!(escape_html(""), "");
+        assert_eq!(escape_html("abc123"), "abc123");
+    }
+
+    #[test]
+    fn test_escape_html_all_special() {
+        assert_eq!(
+            escape_html("<div class=\"foo\" data-x='bar'>&</div>"),
+            "&lt;div class=&quot;foo&quot; data-x=&#x27;bar&#x27;&gt;&amp;&lt;/div&gt;"
+        );
+    }
+
+    #[test]
+    fn test_escape_json_for_script() {
+        assert_eq!(escape_json_for_script("</script>"), "<\\/script>");
+        assert_eq!(escape_json_for_script("no special"), "no special");
+        assert_eq!(escape_json_for_script("</"), "<\\/");
+    }
+
+    #[test]
+    fn test_escape_json_for_script_multiple() {
+        assert_eq!(
+            escape_json_for_script("a</b</c"),
+            "a<\\/b<\\/c"
+        );
+    }
+
+    #[test]
+    fn test_truncate_short_string() {
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_long_string() {
+        assert_eq!(truncate("hello world!", 8), "hello...");
+        assert_eq!(truncate("abcdefghij", 7), "abcd...");
+    }
+
+    #[test]
+    fn test_truncate_very_short_max() {
+        assert_eq!(truncate("hello", 3), "hel");
+        assert_eq!(truncate("hello", 1), "h");
+    }
+
+    #[test]
+    fn test_truncate_exact_length() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_unicode() {
+        // Unicode characters should be counted correctly
+        assert_eq!(truncate("한글테스트입니다", 5), "한글...");
+    }
+
+    #[test]
+    fn test_is_ancestor_direct() {
+        let mut nodes = HashMap::new();
+        nodes.insert(1, ProcessNode {
+            pid: 1, ppid: 0, name: "init".into(), cmdline: "".into(),
+            memory_mb: 0.0, cpu_percent: 0.0, is_target: false,
+            is_whitelisted: false, is_orphan: false, session_id: None,
+        });
+        nodes.insert(100, ProcessNode {
+            pid: 100, ppid: 1, name: "parent".into(), cmdline: "".into(),
+            memory_mb: 0.0, cpu_percent: 0.0, is_target: false,
+            is_whitelisted: false, is_orphan: true, session_id: None,
+        });
+        nodes.insert(200, ProcessNode {
+            pid: 200, ppid: 100, name: "child".into(), cmdline: "".into(),
+            memory_mb: 0.0, cpu_percent: 0.0, is_target: true,
+            is_whitelisted: false, is_orphan: false, session_id: None,
+        });
+
+        assert!(is_ancestor(100, 200, &nodes));
+        assert!(is_ancestor(1, 200, &nodes));
+        assert!(!is_ancestor(200, 100, &nodes));
+        assert!(!is_ancestor(999, 200, &nodes));
+    }
+
+    #[test]
+    fn test_is_ancestor_cycle_protection() {
+        let mut nodes = HashMap::new();
+        // Create a cycle: A -> B -> A
+        nodes.insert(10, ProcessNode {
+            pid: 10, ppid: 20, name: "a".into(), cmdline: "".into(),
+            memory_mb: 0.0, cpu_percent: 0.0, is_target: false,
+            is_whitelisted: false, is_orphan: false, session_id: None,
+        });
+        nodes.insert(20, ProcessNode {
+            pid: 20, ppid: 10, name: "b".into(), cmdline: "".into(),
+            memory_mb: 0.0, cpu_percent: 0.0, is_target: false,
+            is_whitelisted: false, is_orphan: false, session_id: None,
+        });
+
+        // Should not infinite loop
+        assert!(!is_ancestor(999, 10, &nodes));
+    }
+
+    #[test]
+    fn test_matches_patterns_basic() {
+        let patterns = vec![
+            Regex::new("node.*claude").unwrap(),
+            Regex::new("python").unwrap(),
+        ];
+        assert!(matches_patterns("node --experimental claude", &patterns));
+        assert!(matches_patterns("python script.py", &patterns));
+        assert!(!matches_patterns("cargo build", &patterns));
+    }
+
+    #[test]
+    fn test_matches_patterns_empty() {
+        let patterns: Vec<Regex> = vec![];
+        assert!(!matches_patterns("anything", &patterns));
+    }
 }

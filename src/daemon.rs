@@ -121,15 +121,9 @@ fn get_pid_file_path() -> Result<PathBuf> {
 
 /// Write PID to file
 fn write_pid_file(pid: u32) -> Result<()> {
-    let pid_file = get_pid_file_path()?;
-    crate::util::check_not_symlink(&pid_file)?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&pid_file)
-        .context("Failed to open PID file")?;
     use std::io::Write;
+    let pid_file = get_pid_file_path()?;
+    let mut file = crate::util::open_nofollow_write(&pid_file)?;
     file.write_all(pid.to_string().as_bytes())
         .context("Failed to write PID file")?;
     file.sync_all().context("Failed to sync PID file")?;
@@ -189,17 +183,19 @@ pub fn daemonize() -> Result<()> {
     let stdout_file = daemon_dir.join("daemon.out");
     let stderr_file = daemon_dir.join("daemon.err");
 
-    crate::util::check_not_symlink(&stdout_file)?;
-    crate::util::check_not_symlink(&stderr_file)?;
+    use std::os::unix::fs::OpenOptionsExt;
+    use nix::libc;
 
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&stdout_file)
         .context("Failed to open stdout file")?;
     let stderr = OpenOptions::new()
         .create(true)
         .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&stderr_file)
         .context("Failed to open stderr file")?;
 
@@ -421,7 +417,11 @@ fn print_recent_logs(count: usize) {
         Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
         Err(_) => return,
     };
-    entries.sort_by_key(|e| std::cmp::Reverse(e.path()));
+    entries.sort_by(|a, b| {
+        let a_time = a.metadata().and_then(|m| m.modified()).ok();
+        let b_time = b.metadata().and_then(|m| m.modified()).ok();
+        b_time.cmp(&a_time)
+    });
 
     if let Some(entry) = entries.first() {
         if let Ok(file) = std::fs::File::open(entry.path()) {
@@ -505,4 +505,52 @@ pub fn status(json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_daemon_status_serialization() {
+        let status = DaemonStatus {
+            running: true,
+            pid: Some(1234),
+            stale_pid_file: false,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"running\":true"));
+        assert!(json.contains("\"pid\":1234"));
+        assert!(json.contains("\"stale_pid_file\":false"));
+    }
+
+    #[test]
+    fn test_daemon_status_not_running() {
+        let status = DaemonStatus {
+            running: false,
+            pid: None,
+            stale_pid_file: true,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"running\":false"));
+        assert!(json.contains("\"pid\":null"));
+        assert!(json.contains("\"stale_pid_file\":true"));
+    }
+
+    #[test]
+    fn test_get_pid_file_path() {
+        let path = get_pid_file_path();
+        assert!(path.is_ok());
+        let path = path.unwrap();
+        assert!(path.to_string_lossy().contains("proc-janitor.pid"));
+    }
+
+    #[test]
+    fn test_daemon_stop_constants() {
+        // Verify timeout is reasonable: 50 * 100ms = 5 seconds
+        assert_eq!(DAEMON_STOP_MAX_POLLS, 50);
+        assert_eq!(DAEMON_STOP_POLL_INTERVAL_MS, 100);
+        let total_ms = DAEMON_STOP_MAX_POLLS as u64 * DAEMON_STOP_POLL_INTERVAL_MS;
+        assert_eq!(total_ms, 5000);
+    }
 }

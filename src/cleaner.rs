@@ -34,8 +34,9 @@ pub struct CleanSummary {
     pub dry_run: bool,
 }
 
-/// Clean a single process by PID
-pub fn clean_process(
+/// Clean a single process by PID using a shared System instance (for batch operations)
+pub fn clean_process_with_sys(
+    sys: &mut sysinfo::System,
     pid: u32,
     start_time: u64,
     sigterm_timeout: u64,
@@ -53,7 +54,7 @@ pub fn clean_process(
     }
 
     println!("Cleaning process {pid}...");
-    match crate::kill::kill_process(pid, Some(start_time), sigterm_timeout) {
+    match crate::kill::kill_process_with_sys(sys, pid, Some(start_time), sigterm_timeout) {
         Ok(signal) => {
             println!("Process {} terminated ({})", pid, if signal == Signal::SIGKILL { "forced" } else { "graceful" });
             Ok(CleanResult {
@@ -78,6 +79,20 @@ pub fn clean_process(
     }
 }
 
+/// Clean a single process by PID
+#[cfg(test)]
+pub fn clean_process(
+    pid: u32,
+    start_time: u64,
+    sigterm_timeout: u64,
+    dry_run: bool,
+) -> Result<CleanResult> {
+    let mut sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::everything()),
+    );
+    clean_process_with_sys(&mut sys, pid, start_time, sigterm_timeout, dry_run)
+}
+
 /// Clean all orphaned processes
 pub fn clean_all(
     orphans: &[OrphanProcess],
@@ -85,9 +100,12 @@ pub fn clean_all(
     dry_run: bool,
 ) -> Result<Vec<CleanResult>> {
     let mut results = Vec::new();
+    let mut sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::everything()),
+    );
 
     for orphan in orphans {
-        match clean_process(orphan.pid, orphan.start_time, sigterm_timeout, dry_run) {
+        match clean_process_with_sys(&mut sys, orphan.pid, orphan.start_time, sigterm_timeout, dry_run) {
             Ok(mut result) => {
                 result.name = orphan.name.clone();
                 results.push(result);

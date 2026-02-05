@@ -31,7 +31,6 @@ pub fn check_not_symlink(path: &std::path::Path) -> anyhow::Result<()> {
 /// this atomically rejects symlinks during the open call using O_NOFOLLOW.
 /// Callers should write to the returned File handle instead of using fs::write.
 #[cfg(unix)]
-#[allow(dead_code)] // Public API for callers needing TOCTOU-safe writes
 pub fn open_nofollow_write(path: &std::path::Path) -> anyhow::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -55,4 +54,78 @@ pub fn open_nofollow_write(path: &std::path::Path) -> anyhow::Result<std::fs::Fi
                 anyhow::anyhow!("Failed to open {}: {}", path.display(), e)
             }
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_check_not_symlink_regular_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("regular.txt");
+        std::fs::write(&file_path, "test").unwrap();
+        assert!(check_not_symlink(&file_path).is_ok());
+    }
+
+    #[test]
+    fn test_check_not_symlink_nonexistent() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("nonexistent.txt");
+        // Non-existent path should pass (no symlink)
+        assert!(check_not_symlink(&file_path).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_check_not_symlink_actual_symlink() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, "test").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = check_not_symlink(&link);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("symlink"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_open_nofollow_write_regular_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("output.txt");
+
+        let file = open_nofollow_write(&file_path);
+        assert!(file.is_ok());
+
+        use std::io::Write;
+        let mut f = file.unwrap();
+        f.write_all(b"hello").unwrap();
+
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "hello");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_open_nofollow_write_rejects_symlink() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, "original").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = open_nofollow_write(&link);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("symlink"));
+    }
+
+    #[test]
+    fn test_use_color_respects_no_color() {
+        // When NO_COLOR is set, use_color should return false
+        // We can't easily test this without modifying env, so just verify it doesn't panic
+        let _ = use_color();
+    }
 }

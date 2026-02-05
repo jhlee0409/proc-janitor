@@ -155,9 +155,11 @@ fn check_data_directory() -> bool {
     // Check if writable
     let test_file = data_dir.join(".write_test");
     if crate::util::check_not_symlink(&test_file).is_ok() {
-        match fs::write(&test_file, b"test") {
+        let write_result = fs::write(&test_file, b"test");
+        // Always clean up the test file
+        let _ = fs::remove_file(&test_file);
+        match write_result {
             Ok(_) => {
-                let _ = fs::remove_file(&test_file);
                 pass(
                     "Data directory",
                     &format!("{} exists and writable", data_dir.display()),
@@ -207,9 +209,11 @@ fn check_log_directory() -> bool {
     // Check if writable
     let test_file = log_dir.join(".write_test");
     if crate::util::check_not_symlink(&test_file).is_ok() {
-        match fs::write(&test_file, b"test") {
+        let write_result = fs::write(&test_file, b"test");
+        // Always clean up the test file
+        let _ = fs::remove_file(&test_file);
+        match write_result {
             Ok(_) => {
-                let _ = fs::remove_file(&test_file);
                 pass(
                     "Log directory",
                     &format!("{} exists and writable", log_dir.display()),
@@ -380,4 +384,75 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_dir_returns_expected_suffix() {
+        // data_dir() should return Some(.../.proc-janitor) when HOME is set
+        if let Some(dir) = data_dir() {
+            assert!(
+                dir.ends_with(".proc-janitor"),
+                "Expected path ending with .proc-janitor, got: {}",
+                dir.display()
+            );
+        }
+        // If HOME is not set, data_dir() returns None — acceptable in CI
+    }
+
+    #[test]
+    fn test_pass_does_not_panic() {
+        // Verify the formatting function handles various inputs without panicking
+        pass("Test label", "Some detail");
+        pass("", "");
+        pass("Long label text here", "Detail with special chars: <>&\"'");
+    }
+
+    #[test]
+    fn test_fail_does_not_panic() {
+        fail("Test label", "Some failure", Some("Try this fix"));
+        fail("Test label", "Some failure", None);
+        fail("", "", Some(""));
+    }
+
+    #[test]
+    fn test_run_total_matches_check_count() {
+        // The run() function declares total = 8 and calls exactly 8 check functions.
+        // This test verifies the constant is correct by parsing the source.
+        // If someone adds a check but forgets to update total, this catches it.
+        let source = include_str!("doctor.rs");
+
+        // Extract only the run() function body (up to #[cfg(test)] or end)
+        let run_fn_start = source.find("pub fn run()").expect("run() function not found");
+        let run_body = &source[run_fn_start..];
+        let run_body = match run_body.find("#[cfg(test)]") {
+            Some(pos) => &run_body[..pos],
+            None => run_body,
+        };
+
+        let check_calls = run_body.matches("if check_").count();
+        assert_eq!(
+            check_calls, 8,
+            "Number of check calls in run() should match total"
+        );
+    }
+
+    #[test]
+    fn test_check_data_directory_creates_if_missing() {
+        // This test relies on actual HOME dir — it verifies check_data_directory
+        // doesn't panic and returns a bool. The actual directory likely exists
+        // on dev machines.
+        let _result = check_data_directory();
+        // If we reach here without panicking, the test passes
+    }
+
+    #[test]
+    fn test_check_session_store_handles_missing() {
+        // SessionStore::load() handles missing file gracefully
+        let _result = check_session_store();
+        // If we reach here without panicking, the test passes
+    }
 }

@@ -34,12 +34,6 @@ Every 5 seconds (configurable):
 
 ## Installation
 
-### From crates.io (Recommended)
-
-```bash
-cargo install proc-janitor
-```
-
 ### Build from Source
 
 ```bash
@@ -59,14 +53,6 @@ cd proc-janitor && bash scripts/install.sh
 ```
 
 This builds the binary, installs it, creates a default config, and sets up a macOS LaunchAgent for auto-start on login.
-
-### Cargo Install (from source)
-
-```bash
-git clone https://github.com/jhlee0409/proc-janitor.git
-cd proc-janitor
-cargo install --path .
-```
 
 ## Quick Start
 
@@ -182,11 +168,15 @@ Track related processes as a group:
 
 ```bash
 proc-janitor session register --name "my-session" --source terminal
+proc-janitor session register --id custom-id --name "dev" --source vscode --parent-pid 1234
 proc-janitor session track <session-id> <pid>
 proc-janitor session list
 proc-janitor session clean <session-id> [--dry-run]
-proc-janitor session auto-clean
+proc-janitor session unregister <session-id>
+proc-janitor session auto-clean [--dry-run]
 ```
+
+Supported `--source` values: `claude-code`, `terminal`, `vscode`, `tmux`, or any custom string.
 
 ## macOS LaunchAgent
 
@@ -198,24 +188,6 @@ launchctl load ~/Library/LaunchAgents/com.proc-janitor.plist
 
 # Uninstall
 launchctl unload ~/Library/LaunchAgents/com.proc-janitor.plist
-```
-
-## Configuration Examples
-
-### Development Environment
-
-```toml
-targets = ["node", "python", "ruby", "webpack", "vite"]
-whitelist = ["node.*server", "python.*api"]
-grace_period = 60
-```
-
-### Claude Code Only
-
-```toml
-targets = ["claude", "node.*claude", "node.*mcp"]
-whitelist = []
-grace_period = 30
 ```
 
 ## Safety
@@ -240,6 +212,7 @@ proc-janitor/
 │   ├── cleaner.rs     # Process termination (SIGTERM/SIGKILL)
 │   ├── kill.rs        # Shared kill logic (system PID guard, PID reuse check)
 │   ├── config.rs      # TOML config + env var overrides
+│   ├── config_template.toml  # Commented config template (embedded at compile time)
 │   ├── logger.rs      # Structured logging with rotation
 │   ├── session.rs     # Session-based process tracking
 │   └── visualize.rs   # ASCII tree + HTML dashboard
@@ -253,64 +226,6 @@ proc-janitor/
 └── LICENSE
 ```
 
-~3,000 lines of Rust. 20 tests (13 unit + 7 integration).
-
-### Key Dependencies
-
-| Crate | Purpose |
-|-------|---------|
-| `sysinfo` | Cross-platform process table access |
-| `clap` | CLI argument parsing |
-| `nix` | Unix signals (SIGTERM/SIGKILL) |
-| `serde` + `toml` | Configuration |
-| `tracing` | Structured logging |
-| `daemonize` | Unix daemon support |
-| `fs2` | File locking |
-| `regex` | Pattern matching |
-
-## Performance
-
-- **Memory**: ~10-20MB resident
-- **CPU**: <1% with default 5s scan interval
-- **Startup**: <100ms
-- **Scan**: <50ms per 1,000 processes
-
-## Contributing
-
-Contributions are welcome! Here's how:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes (`git commit -am 'Add my feature'`)
-4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a Pull Request
-
-### Development
-
-```bash
-# Build
-cargo build
-
-# Test
-cargo test
-
-# Run with debug logging
-RUST_LOG=debug cargo run -- start --foreground
-
-# Check for issues
-cargo clippy
-```
-
 ## License
 
 [MIT](LICENSE)
-
-## Related Projects
-
-| Project | Platform | Scope |
-|---------|----------|-------|
-| [orphan-reaper](https://github.com/maandree/orphan-reaper) | Linux | Subreaper-based |
-| [zps](https://github.com/orhun/zps) | Linux | Zombie process lister |
-| [phantom-killer](https://github.com/chris-sekira/phantom-killer) | Windows | PowerShell zombie killer |
-
-proc-janitor fills the gap on macOS where none of these tools work, and provides a configurable, pattern-based approach to orphan cleanup.

@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(name = "proc-janitor")]
-#[command(about = "Automated process cleanup daemon for macOS", long_about = None)]
+#[command(about = "Automated process cleanup daemon for macOS/Linux", long_about = None)]
 #[command(version)]
 pub struct Cli {
     /// Output in JSON format

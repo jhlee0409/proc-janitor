@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreCommit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo test --quiet 2>&1 | tail -5 && cargo clippy --quiet -- -D warnings 2>&1 | tail -10"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -23,6 +23,9 @@ firebase-debug.log
 .env
 .env.*
 
+# Analysis reports
+analysis-report.md
+
 # Claude Code internal files
 CLAUDE.md
 **/CLAUDE.md

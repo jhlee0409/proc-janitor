@@ -85,6 +85,11 @@ proc-janitor status
 
 # Stop the daemon
 proc-janitor stop
+
+# Get JSON output
+proc-janitor --json status
+proc-janitor --json config show
+proc-janitor --json scan
 ```
 
 ## Configuration
@@ -138,6 +143,12 @@ PROC_JANITOR_LOG_RETENTION_DAYS=14
 ```
 
 ## CLI Reference
+
+### Global Options
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output results in JSON format (supported by: `status`, `config show`, `scan`, `clean`) |
 
 ### Core Commands
 

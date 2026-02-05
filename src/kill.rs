@@ -111,3 +111,70 @@ pub fn kill_process(pid: u32, start_time: Option<u64>, sigterm_timeout_secs: u64
         Ok(Signal::SIGTERM) // Exited after SIGTERM
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_system_pid_guard_pid0() {
+        let result = kill_process(0, None, 5);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("system process"));
+    }
+
+    #[test]
+    fn test_system_pid_guard_pid1() {
+        let result = kill_process(1, None, 5);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("system process"));
+    }
+
+    #[test]
+    fn test_system_pid_guard_pid2() {
+        let result = kill_process(2, None, 5);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("system process"));
+    }
+
+    #[test]
+    fn test_pid_exceeds_i32_range() {
+        // u32::MAX (4294967295) exceeds i32::MAX
+        let result = kill_process(u32::MAX, None, 5);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("i32 range"));
+    }
+
+    #[test]
+    fn test_process_exists_nonexistent() {
+        assert!(!process_exists(4_000_000_000));
+    }
+
+    #[test]
+    fn test_process_exists_self() {
+        assert!(process_exists(std::process::id()));
+    }
+
+    #[test]
+    fn test_kill_nonexistent_without_start_time() {
+        // Non-existent PID without start_time should return Ok (already gone)
+        let result = kill_process(4_000_000_000, None, 5);
+        // Either Ok (already gone) or Err (i32 range) - both acceptable
+        // 4 billion exceeds i32 range, so this should error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kill_with_wrong_start_time() {
+        // Killing our own PID with wrong start_time should fail (identity mismatch)
+        let our_pid = std::process::id();
+        let result = kill_process(our_pid, Some(0), 5);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("identity changed"));
+    }
+
+    #[test]
+    fn test_verify_identity_nonexistent() {
+        assert!(!verify_process_identity(4_000_000_000, 0));
+    }
+}

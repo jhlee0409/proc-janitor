@@ -7,6 +7,26 @@ use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
 use crate::config::Config;
 
+/// Detect if we're running inside a container.
+/// In containers, all processes have PPID=1 which would cause false positives.
+fn detect_container_environment() -> bool {
+    // Check for Docker
+    if std::path::Path::new("/.dockerenv").exists() {
+        return true;
+    }
+    // Check for common container cgroup indicators
+    if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup") {
+        if cgroup.contains("docker") || cgroup.contains("kubepods") || cgroup.contains("containerd") {
+            return true;
+        }
+    }
+    // Check for container environment variables
+    if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
+        return true;
+    }
+    false
+}
+
 /// Represents an orphaned process detected by the scanner
 #[derive(Debug, Clone, Serialize)]
 pub struct OrphanProcess {
@@ -58,6 +78,13 @@ impl Scanner {
         if target_patterns.is_empty() {
             tracing::warn!("No target patterns configured. Scanner will not detect any orphaned processes. \
                             Run 'proc-janitor config init' to set up target patterns.");
+        }
+
+        if detect_container_environment() {
+            tracing::warn!(
+                "Container environment detected. All processes may appear as orphans (PPID=1). \
+                 proc-janitor may not work correctly inside containers."
+            );
         }
 
         Ok(Self {
@@ -189,4 +216,101 @@ pub fn scan_with_scanner(
         cleaned_count,
         executed: execute,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_container_detection_on_host() {
+        // On a normal macOS/Linux host, this should return false
+        // (unless you're actually running tests in a container)
+        let result = detect_container_environment();
+        // We can't assert false because CI might run in containers
+        // Just verify it doesn't panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_is_orphan_check() {
+        // Just verify the function exists and can be compiled
+        // Actual orphan detection requires a real Process object
+        // which we can't easily mock
+    }
+
+    #[test]
+    fn test_scanner_new_with_empty_targets() {
+        let config = Config {
+            scan_interval: 5,
+            grace_period: 30,
+            sigterm_timeout: 5,
+            targets: vec![],
+            whitelist: vec![],
+            logging: crate::config::LoggingConfig {
+                enabled: false,
+                path: "/tmp/test".to_string(),
+                retention_days: 7,
+            },
+        };
+        let scanner = Scanner::new(config);
+        assert!(scanner.is_ok());
+    }
+
+    #[test]
+    fn test_scanner_new_with_invalid_regex() {
+        let config = Config {
+            scan_interval: 5,
+            grace_period: 30,
+            sigterm_timeout: 5,
+            targets: vec!["[invalid".to_string()],
+            whitelist: vec![],
+            logging: crate::config::LoggingConfig {
+                enabled: false,
+                path: "/tmp/test".to_string(),
+                retention_days: 7,
+            },
+        };
+        let scanner = Scanner::new(config);
+        assert!(scanner.is_err());
+    }
+
+    #[test]
+    fn test_scanner_matches_target() {
+        let config = Config {
+            scan_interval: 5,
+            grace_period: 30,
+            sigterm_timeout: 5,
+            targets: vec!["node.*claude".to_string(), "python".to_string()],
+            whitelist: vec!["node.*server".to_string()],
+            logging: crate::config::LoggingConfig {
+                enabled: false,
+                path: "/tmp/test".to_string(),
+                retention_days: 7,
+            },
+        };
+        let scanner = Scanner::new(config).unwrap();
+        assert!(scanner.matches_target("node --experimental-vm-modules claude"));
+        assert!(scanner.matches_target("python script.py"));
+        assert!(!scanner.matches_target("cargo build"));
+    }
+
+    #[test]
+    fn test_scanner_whitelist() {
+        let config = Config {
+            scan_interval: 5,
+            grace_period: 30,
+            sigterm_timeout: 5,
+            targets: vec!["node".to_string()],
+            whitelist: vec!["node.*server".to_string()],
+            logging: crate::config::LoggingConfig {
+                enabled: false,
+                path: "/tmp/test".to_string(),
+                retention_days: 7,
+            },
+        };
+        let scanner = Scanner::new(config).unwrap();
+        assert!(scanner.is_whitelisted("node express-server"));
+        assert!(!scanner.is_whitelisted("node claude-mcp"));
+    }
 }

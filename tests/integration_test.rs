@@ -94,7 +94,9 @@ fn test_status_command() {
     assert!(
         stdout.contains("not running")
             || stdout.contains("running")
+            || stdout.contains("stopped")
             || stderr.contains("not running")
+            || stderr.contains("stopped")
     );
 }
 

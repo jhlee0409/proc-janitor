@@ -249,7 +249,17 @@ pub fn start(foreground: bool) -> Result<()> {
     }
 
     // Load config
-    let config = Config::load()?;
+    let config = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "Warning: Failed to load config ({}). Using defaults. \
+                 Fix with: proc-janitor config init --force",
+                e
+            );
+            Config::default()
+        }
+    };
     let scanner = Scanner::new(config.clone())?;
 
     if foreground {
@@ -369,7 +379,7 @@ fn get_daemon_uptime(pid: u32) -> Option<String> {
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::new()),
     );
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
 
     let process = sys.process(sysinfo::Pid::from_u32(pid))?;
     let start_time = process.start_time();

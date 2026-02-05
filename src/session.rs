@@ -13,6 +13,9 @@ use std::io::Read as _;
 use std::path::PathBuf;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
+/// Maximum number of sessions to prevent unbounded growth
+const MAX_SESSIONS: usize = 1000;
+
 /// A tracked process with its PID and start time (for PID reuse detection)
 #[derive(Debug, Clone, Serialize)]
 pub struct TrackedPid {
@@ -284,6 +287,14 @@ pub fn register(
     };
 
     let (mut store, file) = SessionStore::load_exclusive()?;
+
+    // Enforce session limit to prevent unbounded growth
+    if store.sessions.len() >= MAX_SESSIONS {
+        bail!(
+            "Session limit reached ({MAX_SESSIONS}). Remove old sessions with 'session unregister' or 'session auto-clean'."
+        );
+    }
+
     store.sessions.insert(session.id.clone(), session);
     store.save_with_lock(&file)?;
 

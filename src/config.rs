@@ -154,6 +154,24 @@ impl Config {
             return Self::new_default();
         }
 
+        // Warn if config file is world-readable or world-writable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = fs::metadata(&path) {
+                let mode = metadata.permissions().mode();
+                if mode & 0o077 != 0 {
+                    eprintln!(
+                        "Warning: Config file {} has overly permissive permissions ({:o}). \
+                         Consider: chmod 600 {}",
+                        path.display(),
+                        mode & 0o777,
+                        path.display()
+                    );
+                }
+            }
+        }
+
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 

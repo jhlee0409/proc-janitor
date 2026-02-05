@@ -1,6 +1,6 @@
 # proc-janitor
 
-> Automatic orphan process cleanup daemon for macOS/Linux
+> Automatic orphan process cleanup daemon for macOS (Linux experimental)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
@@ -53,6 +53,8 @@ cd proc-janitor && bash scripts/install.sh
 ```
 
 This builds the binary, installs it, creates a default config, and sets up a macOS LaunchAgent for auto-start on login.
+
+> **Linux note:** The daemon runs on Linux via `proc-janitor start`, but there is no systemd service file yet. The install script and LaunchAgent are macOS-only. Contributions welcome!
 
 ## Quick Start
 

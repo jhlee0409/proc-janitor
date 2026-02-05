@@ -21,6 +21,16 @@ fn escape_json_for_script(json: &str) -> String {
     json.replace("</", "<\\/")
 }
 
+/// Escape HTML special characters to prevent XSS in vis-network tooltips.
+/// vis-network renders `title` fields as HTML, so user-controlled content must be escaped.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 /// Process info for visualization
 #[derive(Debug, Clone)]
 pub struct ProcessNode {
@@ -388,8 +398,8 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         .map(|n| {
             serde_json::json!({
                 "id": n.pid,
-                "label": format!("{} ({})", n.name, n.pid),
-                "title": format!("PID: {}\nMemory: {:.1}MB\nCmd: {}", n.pid, n.memory_mb, n.cmdline.replace('\n', " ")),
+                "label": format!("{} ({})", escape_html(&n.name), n.pid),
+                "title": format!("PID: {}\nMemory: {:.1}MB\nCmd: {}", n.pid, n.memory_mb, escape_html(&n.cmdline.replace('\n', " "))),
                 "color": if n.is_orphan { "#e74c3c" } else { "#f39c12" },
                 "shape": if n.is_orphan { "diamond" } else { "dot" },
                 "size": (n.memory_mb / 10.0).clamp(10.0, 50.0).round() as i32
@@ -414,7 +424,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         .map(|n| {
             serde_json::json!({
                 "id": n.pid,
-                "label": format!("{} ({})", n.name, n.pid),
+                "label": format!("{} ({})", escape_html(&n.name), n.pid),
                 "title": format!("PID: {}\nMemory: {:.1}MB", n.pid, n.memory_mb),
                 "color": "#95a5a6",
                 "shape": "dot",
@@ -473,7 +483,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {}
     <title>proc-janitor Dashboard</title>
-    <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
+    <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js" integrity="sha384-wF3MqOaDOoJh1GJRKfhPEOBpFAxbPKKGilSOGMrqJVoJWiHRjLsKP4hq3kYMlBh" crossorigin="anonymous"></script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{

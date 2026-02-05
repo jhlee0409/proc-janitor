@@ -127,3 +127,37 @@ pub fn clean(dry_run: bool) -> Result<CleanSummary> {
         dry_run,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_process_dry_run() {
+        let result = clean_process(12345, 0, 5, true).unwrap();
+        assert!(result.success);
+        assert_eq!(result.signal_used, Signal::SIGTERM);
+    }
+
+    #[test]
+    fn test_clean_all_empty() {
+        let result = clean_all(&[], 5, false).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_clean_all_dry_run() {
+        let orphans = vec![
+            crate::scanner::OrphanProcess {
+                pid: 99999,
+                name: "test".to_string(),
+                cmdline: "test cmd".to_string(),
+                first_seen: std::time::Instant::now(),
+                start_time: 0,
+            },
+        ];
+        let results = clean_all(&orphans, 5, true).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success);
+    }
+}

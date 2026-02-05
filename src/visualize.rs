@@ -13,6 +13,7 @@ use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
 use crate::config::Config;
 use crate::session::SessionStore;
+use crate::util::use_color;
 
 /// Escape JSON for safe embedding inside HTML <script> tags.
 /// Prevents XSS via `</script>` breakout by replacing `</` with `<\/`.
@@ -47,8 +48,8 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
     let session_store = SessionStore::load().unwrap_or_default();
     let mut pid_to_session: HashMap<u32, String> = HashMap::new();
     for session in session_store.sessions.values() {
-        for &pid in &session.pids {
-            pid_to_session.insert(pid, session.id.clone());
+        for tp in &session.pids {
+            pid_to_session.insert(tp.pid, session.id.clone());
         }
     }
 
@@ -195,12 +196,12 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
                 if let Some(node) = nodes.get(&pid) {
                     // Skip non-interesting processes unless they're targets
                     if (!node.is_target || node.is_whitelisted)
-                        && !has_target_descendant(pid, &children, &nodes)
+                        && !has_target_descendant(pid, &children, &nodes, &mut HashSet::new())
                     {
                         continue;
                     }
                     let is_last = i == len - 1;
-                    print_subtree(node, "", is_last, &children, &nodes);
+                    print_subtree(node, "", is_last, &children, &nodes, &mut HashSet::new());
                 }
             }
         }
@@ -209,18 +210,23 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
     // Summary of cleanable processes
     if !orphan_targets.is_empty() {
         println!();
-        println!("┌─────────────────────────────────────────────────────────────────────────────┐");
-        println!("│ 🧹 Cleanable Orphan Processes                                               │");
-        println!("├─────────────────────────────────────────────────────────────────────────────┤");
+        let box_width = 78;
+        println!("┌{}┐", "─".repeat(box_width - 2));
+        let title = " Cleanable Orphan Processes";
+        let title_pad = box_width - 2 - title.chars().count();
+        println!("│{}{}│", title, " ".repeat(title_pad));
+        println!("├{}┤", "─".repeat(box_width - 2));
         for node in orphan_targets {
-            println!(
-                "│  PID {:>6}  {:>6.1} MB  {}",
+            let line = format!(
+                "  PID {:>6}  {:>6.1} MB  {}",
                 node.pid,
                 node.memory_mb,
                 truncate(&node.name, 50)
             );
+            let line_pad = box_width - 2 - line.chars().count();
+            println!("│{}{}│", line, " ".repeat(line_pad));
         }
-        println!("└─────────────────────────────────────────────────────────────────────────────┘");
+        println!("└{}┘", "─".repeat(box_width - 2));
         println!();
         println!("Run `proc-janitor clean` to terminate these processes.");
     }
@@ -232,7 +238,11 @@ fn has_target_descendant(
     pid: u32,
     children: &HashMap<u32, Vec<u32>>,
     nodes: &HashMap<u32, ProcessNode>,
+    visited: &mut HashSet<u32>,
 ) -> bool {
+    if !visited.insert(pid) {
+        return false; // Already visited, cycle detected
+    }
     if let Some(node) = nodes.get(&pid) {
         if node.is_target && !node.is_whitelisted {
             return true;
@@ -240,7 +250,7 @@ fn has_target_descendant(
     }
     if let Some(child_pids) = children.get(&pid) {
         for &child_pid in child_pids {
-            if has_target_descendant(child_pid, children, nodes) {
+            if has_target_descendant(child_pid, children, nodes, visited) {
                 return true;
             }
         }
@@ -254,7 +264,11 @@ fn print_subtree(
     is_last: bool,
     children: &HashMap<u32, Vec<u32>>,
     nodes: &HashMap<u32, ProcessNode>,
+    visited: &mut HashSet<u32>,
 ) {
+    if !visited.insert(node.pid) {
+        return; // Already visited, cycle detected
+    }
     let connector = if is_last { "└── " } else { "├── " };
     print_node(node, &format!("{prefix}{connector}"));
 
@@ -268,7 +282,7 @@ fn print_subtree(
                     .get(&pid)
                     .map(|n| n.is_target && !n.is_whitelisted)
                     .unwrap_or(false)
-                    || has_target_descendant(pid, children, nodes)
+                    || has_target_descendant(pid, children, nodes, &mut HashSet::new())
             })
             .collect();
 
@@ -276,15 +290,10 @@ fn print_subtree(
         for (i, &&pid) in interesting_children.iter().enumerate() {
             if let Some(child_node) = nodes.get(&pid) {
                 let is_last = i == len - 1;
-                print_subtree(child_node, &new_prefix, is_last, children, nodes);
+                print_subtree(child_node, &new_prefix, is_last, children, nodes, visited);
             }
         }
     }
-}
-
-fn use_color() -> bool {
-    std::env::var("NO_COLOR").is_err()
-        && supports_color::on(supports_color::Stream::Stdout).is_some()
 }
 
 fn print_node(
@@ -383,7 +392,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
                 "title": format!("PID: {}\nMemory: {:.1}MB\nCmd: {}", n.pid, n.memory_mb, n.cmdline.replace('\n', " ")),
                 "color": if n.is_orphan { "#e74c3c" } else { "#f39c12" },
                 "shape": if n.is_orphan { "diamond" } else { "dot" },
-                "size": (n.memory_mb / 10.0).clamp(10.0, 50.0) as i32
+                "size": (n.memory_mb / 10.0).clamp(10.0, 50.0).round() as i32
             }).to_string()
         })
         .collect();
@@ -436,7 +445,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
                 "id": s.id,
                 "name": s.name.as_deref().unwrap_or(""),
                 "source": s.source.to_string(),
-                "pids": s.pids,
+                "pids": s.pids.iter().map(|tp| tp.pid).collect::<Vec<u32>>(),
                 "created": s.created_at.format("%Y-%m-%d %H:%M:%S").to_string()
             }).to_string()
         })
@@ -806,6 +815,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
     } else {
         anyhow::bail!("Cannot determine parent directory for dashboard output path");
     }
+    crate::util::check_not_symlink(&output_path)?;
     fs::write(&output_path, html)?;
 
     Ok(output_path)
@@ -838,10 +848,17 @@ pub fn open_dashboard(live: bool, interval: u64) -> Result<()> {
     println!("Opening in browser...");
 
     #[cfg(target_os = "macos")]
-    std::process::Command::new("open").arg(&path).spawn()?;
+    {
+        let mut child = std::process::Command::new("open").arg(&path).spawn()?;
+        // Wait briefly for the launcher to hand off to the browser
+        let _ = child.wait();
+    }
 
     #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open").arg(&path).spawn()?;
+    {
+        let mut child = std::process::Command::new("xdg-open").arg(&path).spawn()?;
+        let _ = child.wait();
+    }
 
     if live {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -852,7 +869,9 @@ pub fn open_dashboard(live: bool, interval: u64) -> Result<()> {
         ctrlc::set_handler(move || {
             r.store(false, Ordering::SeqCst);
         })
-        .ok(); // ok() because handler may already be set by daemon
+        .unwrap_or_else(|e| {
+            eprintln!("Warning: Could not set Ctrl+C handler: {e}. Use 'kill' to stop live mode.");
+        });
 
         println!(
             "Live mode: refreshing every {interval}s. Press Ctrl+C to stop."

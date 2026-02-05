@@ -67,13 +67,16 @@ fn test_scan_json_output() {
         return;
     };
 
-    // If we found JSON-like content, try to parse it
-    if let Some(start) = json_output.find('{') {
-        let json_part = &json_output[start..];
-        if let Some(end) = json_part.find('}') {
-            let json_str = &json_part[..=end];
-            let _: serde_json::Value =
-                serde_json::from_str(json_str).expect("Output should be valid JSON");
+    // Find the JSON object in the output (may be preceded by non-JSON text)
+    let json_start = json_output.find('{');
+    let json_end = json_output.rfind('}'); // Use rfind for the LAST closing brace
+    if let (Some(start), Some(end)) = (json_start, json_end) {
+        if end > start {
+            let json_str = &json_output[start..=end];
+            let result: serde_json::Value = serde_json::from_str(json_str)
+                .expect("Failed to parse scan JSON output");
+            assert!(result.get("orphans").is_some(), "JSON should have 'orphans' field");
+            assert!(result.get("orphan_count").is_some(), "JSON should have 'orphan_count' field");
         }
     }
 }

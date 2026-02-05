@@ -19,7 +19,7 @@ pub fn verify_process_identity(pid: u32, expected_start_time: u64) -> bool {
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
-    sys.refresh_processes(ProcessesToUpdate::All);
+    sys.refresh_processes(ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
 
     if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
         process.start_time() == expected_start_time

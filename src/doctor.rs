@@ -97,6 +97,35 @@ fn check_config_validation() -> bool {
     }
 }
 
+fn check_targets_configured() -> bool {
+    match config::Config::load() {
+        Ok(config) => {
+            if config.targets.is_empty() {
+                fail(
+                    "Target patterns",
+                    "No target patterns configured",
+                    Some("Run 'proc-janitor config init' to set up"),
+                );
+                false
+            } else {
+                pass(
+                    "Target patterns",
+                    &format!("{} pattern{} configured", config.targets.len(), if config.targets.len() == 1 { "" } else { "s" }),
+                );
+                true
+            }
+        }
+        Err(_) => {
+            fail(
+                "Target patterns",
+                "Cannot load config",
+                None,
+            );
+            false
+        }
+    }
+}
+
 fn check_data_directory() -> bool {
     let data_dir = match data_dir() {
         Some(d) => d,
@@ -295,12 +324,15 @@ pub fn run() -> Result<()> {
     println!();
 
     let mut passed = 0;
-    let total = 7;
+    let total = 8;
 
     if check_config_file() {
         passed += 1;
     }
     if check_config_validation() {
+        passed += 1;
+    }
+    if check_targets_configured() {
         passed += 1;
     }
     if check_data_directory() {

@@ -54,6 +54,11 @@ impl Scanner {
                 anyhow::anyhow!("Invalid whitelist regex pattern in configuration: {e}")
             })?;
 
+        if target_patterns.is_empty() {
+            tracing::warn!("No target patterns configured. Scanner will not detect any orphaned processes. \
+                            Run 'proc-janitor config init' to set up target patterns.");
+        }
+
         Ok(Self {
             config,
             tracked: HashMap::new(),
@@ -142,7 +147,11 @@ impl Scanner {
     }
 }
 
-/// Check if a process is an orphan (PPID = 1)
+/// Check if a process is orphaned (PPID=1, reparented to init/launchd).
+///
+/// Note: In containers (Docker, etc.), all processes have PPID=1 since PID 1
+/// is the container's init process. Running proc-janitor inside a container
+/// would incorrectly flag all processes as orphans.
 fn is_orphan(process: &sysinfo::Process) -> bool {
     process.parent().map(|p| p.as_u32()) == Some(1)
 }

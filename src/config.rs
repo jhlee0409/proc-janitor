@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::util::use_color;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub scan_interval: u64,
@@ -20,11 +22,6 @@ pub struct LoggingConfig {
     pub enabled: bool,
     pub path: String,
     pub retention_days: u32,
-}
-
-fn use_color() -> bool {
-    std::env::var("NO_COLOR").is_err()
-        && supports_color::on(supports_color::Stream::Stdout).is_some()
 }
 
 impl Default for Config {
@@ -86,6 +83,14 @@ impl Config {
 
     /// Validate all regex patterns in the configuration
     pub fn validate(&self) -> Result<()> {
+        // Validate scan_interval range
+        if self.scan_interval == 0 || self.scan_interval > 3600 {
+            anyhow::bail!(
+                "scan_interval must be between 1 and 3600 seconds, got {}",
+                self.scan_interval
+            );
+        }
+
         for pattern in &self.targets {
             Regex::new(pattern).with_context(|| format!("Invalid target pattern: {pattern}"))?;
         }
@@ -224,13 +229,18 @@ impl Config {
         // Reject paths to system directories (case-insensitive)
         let lower_path = path.to_lowercase();
         let dangerous_prefixes = [
-            "/etc/", "/usr/", "/bin/", "/sbin/", "/system/", "/boot/", "/root/", "/var/", "/tmp/",
+            "/etc/", "/usr/", "/bin/", "/sbin/", "/system/", "/boot/", "/root/", "/tmp/",
         ];
 
         for prefix in &dangerous_prefixes {
             if lower_path.starts_with(prefix) {
                 return false;
             }
+        }
+
+        // Allow /var/log/ but block other /var/ subdirectories
+        if lower_path.starts_with("/var/") && !lower_path.starts_with("/var/log/") {
+            return false;
         }
 
         // For absolute paths, try to verify they're under user's home directory
@@ -326,21 +336,17 @@ fn get_preset(name: &str) -> Result<Preset> {
     }
 }
 
-/// Format a TOML array from string slices
-fn format_toml_array(items: &[&str]) -> String {
+/// Format a TOML array field with parameterized name
+fn format_toml_field(name: &str, items: &[&str]) -> String {
     if items.is_empty() {
-        return "targets = []".to_string();
+        return format!("{name} = []");
     }
-    let entries: Vec<String> = items.iter().map(|s| format!("    \"{s}\",")).collect();
-    format!("targets = [\n{}\n]", entries.join("\n"))
-}
-
-fn format_toml_whitelist(items: &[&str]) -> String {
-    if items.is_empty() {
-        return "whitelist = []".to_string();
-    }
-    let entries: Vec<String> = items.iter().map(|s| format!("    \"{s}\",")).collect();
-    format!("whitelist = [\n{}\n]", entries.join("\n"))
+    let formatted = items
+        .iter()
+        .map(|t| format!("    \"{t}\""))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!("{name} = [\n{formatted}\n]")
 }
 
 /// Render config template with targets, whitelist, and log path
@@ -352,8 +358,8 @@ fn render_template(targets: &[&str], whitelist: &[&str]) -> Result<String> {
         .to_string_lossy()
         .to_string();
     Ok(CONFIG_TEMPLATE
-        .replace("{targets}", &format_toml_array(targets))
-        .replace("{whitelist}", &format_toml_whitelist(whitelist))
+        .replace("{targets}", &format_toml_field("targets", targets))
+        .replace("{whitelist}", &format_toml_field("whitelist", whitelist))
         .replace("{log_path}", &log_path))
 }
 
@@ -410,6 +416,7 @@ fn detect_orphan_categories() -> Vec<(String, Vec<String>, usize)> {
 
 /// Write config file and validate
 fn write_config(path: &std::path::Path, content: &str) -> Result<()> {
+    crate::util::check_not_symlink(path)?;
     fs::write(path, content)
         .with_context(|| format!("Failed to write config file: {}", path.display()))?;
 
@@ -462,14 +469,10 @@ pub fn init(force: bool, preset: Option<String>, yes: bool) -> Result<()> {
     println!("Detected orphaned processes:");
     let mut all_targets: Vec<&str> = Vec::new();
     for (category, patterns, count) in &detected {
-        let check_mark = if *count > 0 {
-            if use_color() {
-                format!("{}", "✓".green())
-            } else {
-                "✓".to_string()
-            }
+        let check_mark = if use_color() {
+            format!("{}", "✓".green())
         } else {
-            " ".to_string()
+            "✓".to_string()
         };
         println!("  {check_mark} {category} {count} orphan(s)");
         for p in patterns {
@@ -524,6 +527,7 @@ pub fn edit() -> Result<()> {
         let default_targets = &["node.*claude", "claude", "node.*mcp"];
         let default_whitelist = &["node.*server", "pm2"];
         let content = render_template(default_targets, default_whitelist)?;
+        crate::util::check_not_symlink(&path)?;
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
     }
@@ -531,19 +535,26 @@ pub fn edit() -> Result<()> {
     // Get editor from environment or use default
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
 
-    // Security: Validate editor to prevent command injection
-    // Only allow safe characters: alphanumeric, hyphens, underscores, dots, and forward slashes
-    if !editor
+    // Split editor command - first token is the executable, rest are args
+    let parts: Vec<&str> = editor.split_whitespace().collect();
+    let editor_bin = parts.first().copied().unwrap_or(&editor);
+
+    // Validate executable name only (not flags)
+    let safe_editor = editor_bin
         .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.')
-    {
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.');
+
+    if !safe_editor {
         anyhow::bail!("Invalid EDITOR value: must contain only alphanumeric characters, hyphens, underscores, dots, or slashes");
     }
 
-    // Open editor
-    std::process::Command::new(&editor)
-        .arg(&path)
-        .status()
+    // Open editor with args
+    let mut cmd = std::process::Command::new(editor_bin);
+    if parts.len() > 1 {
+        cmd.args(&parts[1..]);
+    }
+    cmd.arg(&path);
+    let _status = cmd.status()
         .with_context(|| format!("Failed to open editor for config: {}", path.display()))?;
 
     // Validate the edited config

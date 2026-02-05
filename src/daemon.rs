@@ -6,6 +6,7 @@ use daemonize::Daemonize;
 use owo_colors::OwoColorize;
 use serde::Serialize;
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -50,14 +51,6 @@ impl Daemon {
             .unwrap_or_else(|e| e.into_inner());
     }
 
-    /// Signal the daemon to wake up
-    #[allow(dead_code)] // Used for graceful shutdown in future
-    pub fn wake(&self) {
-        let (lock, cvar) = &*self.condvar;
-        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = true;
-        cvar.notify_one();
-    }
 
     pub fn start(&mut self) -> Result<()> {
         // Initialize logger
@@ -105,11 +98,6 @@ impl Daemon {
         Ok(())
     }
 
-    #[allow(dead_code)] // Used for graceful shutdown in future
-    pub fn stop(&self) {
-        self.running.store(false, Ordering::SeqCst);
-        self.wake();
-    }
 }
 
 /// Get the PID file path
@@ -121,12 +109,20 @@ fn get_pid_file_path() -> Result<PathBuf> {
     // Create directory if it doesn't exist
     fs::create_dir_all(&pid_dir).context("Failed to create PID directory")?;
 
+    // Set directory permissions to 700 on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&pid_dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+
     Ok(pid_dir.join("proc-janitor.pid"))
 }
 
 /// Write PID to file
 fn write_pid_file(pid: u32) -> Result<()> {
     let pid_file = get_pid_file_path()?;
+    crate::util::check_not_symlink(&pid_file)?;
     fs::write(&pid_file, pid.to_string()).context("Failed to write PID file")?;
     Ok(())
 }
@@ -174,11 +170,29 @@ pub fn daemonize() -> Result<()> {
     // Create directory if it doesn't exist
     fs::create_dir_all(&daemon_dir).context("Failed to create daemon directory")?;
 
+    // Set directory permissions to 700 on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&daemon_dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+
     let stdout_file = daemon_dir.join("daemon.out");
     let stderr_file = daemon_dir.join("daemon.err");
 
-    let stdout = fs::File::create(&stdout_file).context("Failed to create stdout file")?;
-    let stderr = fs::File::create(&stderr_file).context("Failed to create stderr file")?;
+    crate::util::check_not_symlink(&stdout_file)?;
+    crate::util::check_not_symlink(&stderr_file)?;
+
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stdout_file)
+        .context("Failed to open stdout file")?;
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stderr_file)
+        .context("Failed to open stderr file")?;
 
     let daemonize = Daemonize::new()
         .working_directory(&daemon_dir)
@@ -269,6 +283,26 @@ pub fn stop() -> Result<()> {
             println!("Daemon is not running (stale PID file)");
             remove_pid_file()?;
             return Ok(());
+        }
+
+        // Verify PID identity before sending signals
+        {
+            use sysinfo::{ProcessRefreshKind, RefreshKind, System, ProcessesToUpdate};
+            let mut sys = System::new_with_specifics(
+                RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+            );
+            sys.refresh_processes(ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
+
+            if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
+                let name = process.name().to_string_lossy().to_string();
+                if !name.contains("proc-janitor") && !name.contains("proc_janitor") {
+                    bail!(
+                        "PID {} is not proc-janitor (found: '{}'). PID file may be stale. \
+                         Remove {} manually if the daemon is not running.",
+                        pid, name, get_pid_file_path().unwrap_or_default().display()
+                    );
+                }
+            }
         }
 
         // Send SIGTERM using nix
@@ -371,8 +405,10 @@ fn print_recent_logs(count: usize) {
     entries.sort_by_key(|e| std::cmp::Reverse(e.path()));
 
     if let Some(entry) = entries.first() {
-        if let Ok(content) = std::fs::read_to_string(entry.path()) {
-            let lines: Vec<&str> = content.lines().collect();
+        if let Ok(file) = std::fs::File::open(entry.path()) {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(file);
+            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
             let start = lines.len().saturating_sub(count);
             if !lines[start..].is_empty() {
                 println!("\n  Recent logs:");

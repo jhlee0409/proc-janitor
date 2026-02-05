@@ -72,8 +72,8 @@ pub enum Commands {
         follow: bool,
 
         /// Number of lines to show
-        #[arg(short = 'n', long, default_value = "50")]
-        lines: usize,
+        #[arg(short = 'n', long, default_value = "50", value_parser = clap::value_parser!(u64).range(1..))]
+        lines: u64,
     },
 
     /// Session-based process tracking

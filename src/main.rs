@@ -7,18 +7,14 @@ mod kill;
 mod logger;
 mod scanner;
 mod session;
+mod util;
 mod visualize;
 
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands, ConfigCommands, SessionCommands};
 use owo_colors::OwoColorize;
-
-/// Check if color output is enabled (respects NO_COLOR and isatty)
-fn use_color() -> bool {
-    std::env::var("NO_COLOR").is_err()
-        && supports_color::on(supports_color::Stream::Stdout).is_some()
-}
+use util::use_color;
 
 fn run() -> Result<()> {
     let cli = Cli::parse();

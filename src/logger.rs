@@ -70,7 +70,7 @@ fn cleanup_old_logs_with_params(path: &Path, retention_days: u32) -> Result<()> 
         return Ok(()); // Never delete logs
     }
 
-    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
 
     let entries = fs::read_dir(path)
         .with_context(|| format!("Failed to read log directory: {}", path.display()))?;
@@ -121,7 +121,7 @@ fn cleanup_old_logs_with_params(path: &Path, retention_days: u32) -> Result<()> 
 }
 
 /// Show logs (used by the CLI `logs` command)
-pub fn show_logs(follow: bool, lines: usize) -> Result<()> {
+pub fn show_logs(follow: bool, lines: u64) -> Result<()> {
     let config = crate::config::Config::load()?;
     let log_path = PathBuf::from(&config.logging.path);
 

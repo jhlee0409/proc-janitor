@@ -5,7 +5,7 @@
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
@@ -13,13 +13,43 @@ use std::io::Read as _;
 use std::path::PathBuf;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
+/// A tracked process with its PID and start time (for PID reuse detection)
+#[derive(Debug, Clone, Serialize)]
+pub struct TrackedPid {
+    pub pid: u32,
+    pub start_time: Option<u64>,
+}
+
+/// Custom deserializer for backward compatibility: accepts both a bare u32 and a {pid, start_time} object.
+impl<'de> Deserialize<'de> for TrackedPid {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum TrackedPidRepr {
+            Bare(u32),
+            Full { pid: u32, start_time: Option<u64> },
+        }
+
+        match TrackedPidRepr::deserialize(deserializer)? {
+            TrackedPidRepr::Bare(pid) => Ok(TrackedPid {
+                pid,
+                start_time: None,
+            }),
+            TrackedPidRepr::Full { pid, start_time } => Ok(TrackedPid { pid, start_time }),
+        }
+    }
+}
+
 /// Represents a tracked session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub name: Option<String>,
     pub source: SessionSource,
-    pub pids: Vec<u32>,
+    pub pids: Vec<TrackedPid>,
     pub created_at: DateTime<Utc>,
     pub tty: Option<String>,
     pub parent_pid: Option<u32>,
@@ -85,7 +115,8 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
-    /// Load session store from disk
+    /// Load session store from disk with a shared lock (read-only).
+    /// Use `load_exclusive()` for read-modify-write operations.
     pub fn load() -> Result<Self> {
         let path = sessions_path()?;
         if !path.exists() {
@@ -129,106 +160,56 @@ impl SessionStore {
         }
     }
 
-    /// Save session store to disk
-    pub fn save(&self) -> Result<()> {
+    /// Load session store with exclusive lock for read-modify-write operations.
+    /// Returns the store and the locked file handle. Caller must pass file to `save_with_lock()`.
+    fn load_exclusive() -> Result<(SessionStore, std::fs::File)> {
         ensure_data_dir()?;
         let path = sessions_path()?;
-
-        // Open file for exclusive lock
-        let file = OpenOptions::new()
+        crate::util::check_not_symlink(&path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path)
-            .with_context(|| {
-                format!(
-                    "Failed to open sessions file for locking: {}",
-                    path.display()
-                )
-            })?;
+            .open(&path)?;
 
-        fs2::FileExt::lock_exclusive(&file)
-            .with_context(|| "Failed to acquire exclusive lock on sessions file")?;
+        fs2::FileExt::lock_exclusive(&file)?;
 
-        // Serialize content
-        let content = serde_json::to_string_pretty(self)?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
 
-        // Truncate and write directly under the lock
-        file.set_len(0)
-            .with_context(|| "Failed to truncate sessions file")?;
-        use std::io::Write;
-        (&file).write_all(content.as_bytes())
-            .with_context(|| "Failed to write sessions file")?;
+        let store = if content.is_empty() {
+            SessionStore {
+                sessions: HashMap::new(),
+            }
+        } else {
+            serde_json::from_str(&content).unwrap_or_else(|_| {
+                // Corruption recovery - same as load()
+                let _ = std::fs::copy(&path, path.with_extension("json.bak"));
+                SessionStore {
+                    sessions: HashMap::new(),
+                }
+            })
+        };
 
-        fs2::FileExt::unlock(&file)
-            .with_context(|| "Failed to release lock on sessions file")?;
-
-        Ok(())
+        Ok((store, file))
     }
 
-    /// Register a new session
-    pub fn register(&mut self, session: Session) -> Result<()> {
-        self.sessions.insert(session.id.clone(), session);
-        self.save()
+    /// Save session store to an already-locked file handle.
+    fn save_with_lock(&self, file: &std::fs::File) -> Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let content = serde_json::to_string_pretty(self)?;
+        file.set_len(0)?;
+        (&*file).seek(SeekFrom::Start(0))?;
+        (&*file).write_all(content.as_bytes())?;
+        file.sync_all()?;
+        // Lock released when file is dropped
+        Ok(())
     }
 
     /// Get a session by ID
     pub fn get(&self, id: &str) -> Option<&Session> {
         self.sessions.get(id)
-    }
-
-    /// Remove a session
-    pub fn remove(&mut self, id: &str) -> Result<Option<Session>> {
-        let session = self.sessions.remove(id);
-        self.save()?;
-        Ok(session)
-    }
-
-    /// Add a PID to a session
-    pub fn add_pid(&mut self, session_id: &str, pid: u32) -> Result<()> {
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            if !session.pids.contains(&pid) {
-                session.pids.push(pid);
-            }
-            self.save()?;
-            Ok(())
-        } else {
-            bail!("Session not found: {session_id}")
-        }
-    }
-
-    /// Clean up stale sessions (parent process no longer exists)
-    #[allow(dead_code)] // May be used for future session management features
-    pub fn cleanup_stale(&mut self) -> Result<Vec<String>> {
-        let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-        );
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
-
-        let stale: Vec<String> = self
-            .sessions
-            .iter()
-            .filter(|(_, session)| {
-                if let Some(parent_pid) = session.parent_pid {
-                    // Check if parent process still exists
-                    !sys.processes()
-                        .contains_key(&sysinfo::Pid::from_u32(parent_pid))
-                } else {
-                    false
-                }
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        for id in &stale {
-            self.sessions.remove(id);
-        }
-
-        if !stale.is_empty() {
-            self.save()?;
-        }
-
-        Ok(stale)
     }
 
     /// List all sessions
@@ -294,8 +275,9 @@ pub fn register(
         parent_pid: parent_pid.or_else(|| Some(std::process::id())),
     };
 
-    let mut store = SessionStore::load()?;
-    store.register(session)?;
+    let (mut store, file) = SessionStore::load_exclusive()?;
+    store.sessions.insert(session.id.clone(), session);
+    store.save_with_lock(&file)?;
 
     println!("Session registered: {session_id}");
     Ok(session_id)
@@ -303,15 +285,33 @@ pub fn register(
 
 /// Track a PID under a session
 pub fn track(session_id: &str, pid: u32) -> Result<()> {
-    let mut store = SessionStore::load()?;
-    store.add_pid(session_id, pid)?;
-    println!("PID {pid} tracked under session {session_id}");
-    Ok(())
+    let (mut store, file) = SessionStore::load_exclusive()?;
+
+    // Capture start_time from process table for PID reuse detection
+    let start_time = {
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+        );
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+        sys.process(sysinfo::Pid::from_u32(pid))
+            .map(|p| p.start_time())
+    };
+
+    if let Some(session) = store.sessions.get_mut(session_id) {
+        if !session.pids.iter().any(|tp| tp.pid == pid) {
+            session.pids.push(TrackedPid { pid, start_time });
+        }
+        store.save_with_lock(&file)?;
+        println!("PID {pid} tracked under session {session_id}");
+        Ok(())
+    } else {
+        bail!("Session not found: {session_id}")
+    }
 }
 
 /// Clean up a specific session's processes
 pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
-    let mut store = SessionStore::load()?;
+    let (mut store, file) = SessionStore::load_exclusive()?;
 
     let session = store
         .get(session_id)
@@ -332,7 +332,15 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
 
     // Find all descendant processes
-    let pids_to_clean = find_descendant_pids(&sys, &session.pids);
+    let root_pids: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
+    let pids_to_clean = find_descendant_pids(&sys, &root_pids);
+
+    // Build a map from pid -> start_time from tracked pids for kill verification
+    let start_time_map: HashMap<u32, Option<u64>> = session
+        .pids
+        .iter()
+        .map(|tp| (tp.pid, tp.start_time))
+        .collect();
 
     if pids_to_clean.is_empty() {
         println!("No processes to clean.");
@@ -346,11 +354,20 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
         }
 
         if !dry_run {
+            let mut killed = 0;
+            let mut failed = 0;
             for pid in &pids_to_clean {
-                let _ = kill_process(*pid);
+                let st = start_time_map.get(pid).copied().flatten();
+                match kill_process(*pid, st) {
+                    Ok(_) => killed += 1,
+                    Err(e) => {
+                        failed += 1;
+                        tracing::warn!("Failed to kill PID {}: {}", pid, e);
+                    }
+                }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            println!("Processes terminated.");
+            println!("  Killed: {killed}, Failed: {failed}");
         } else {
             println!("\n(dry-run mode - no processes were killed)");
         }
@@ -358,7 +375,8 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
 
     // Remove session from store
     if !dry_run {
-        store.remove(session_id)?;
+        store.sessions.remove(session_id);
+        store.save_with_lock(&file)?;
         println!("Session {session_id} removed.");
     }
 
@@ -386,7 +404,8 @@ pub fn list() -> Result<()> {
             "    Created: {}",
             session.created_at.format("%Y-%m-%d %H:%M:%S")
         );
-        println!("    Tracked PIDs: {:?}", session.pids);
+        let pid_list: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
+        println!("    Tracked PIDs: {pid_list:?}");
         if let Some(tty) = &session.tty {
             println!("    TTY: {tty}");
         }
@@ -398,8 +417,9 @@ pub fn list() -> Result<()> {
 
 /// Unregister a session without cleaning processes
 pub fn unregister(session_id: &str) -> Result<()> {
-    let mut store = SessionStore::load()?;
-    if store.remove(session_id)?.is_some() {
+    let (mut store, file) = SessionStore::load_exclusive()?;
+    if store.sessions.remove(session_id).is_some() {
+        store.save_with_lock(&file)?;
         println!("Session {session_id} unregistered.");
     } else {
         println!("Session {session_id} not found.");
@@ -409,7 +429,7 @@ pub fn unregister(session_id: &str) -> Result<()> {
 
 /// Auto-detect and clean orphaned sessions
 pub fn auto_clean(dry_run: bool) -> Result<()> {
-    let mut store = SessionStore::load()?;
+    let (mut store, file) = SessionStore::load_exclusive()?;
 
     // Find stale sessions first
     let mut sys = System::new_with_specifics(
@@ -448,12 +468,30 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
             );
 
             if !dry_run {
+                // Build start_time map from tracked pids
+                let start_time_map: HashMap<u32, Option<u64>> = session
+                    .pids
+                    .iter()
+                    .map(|tp| (tp.pid, tp.start_time))
+                    .collect();
+
                 // Kill descendant processes
-                let pids_to_clean = find_descendant_pids(&sys, &session.pids);
+                let root_pids: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
+                let pids_to_clean = find_descendant_pids(&sys, &root_pids);
+                let mut killed = 0;
+                let mut failed = 0;
                 for pid in &pids_to_clean {
-                    let _ = kill_process(*pid);
+                    let st = start_time_map.get(pid).copied().flatten();
+                    match kill_process(*pid, st) {
+                        Ok(_) => killed += 1,
+                        Err(e) => {
+                            failed += 1;
+                            tracing::warn!("Failed to kill PID {}: {}", pid, e);
+                        }
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
+                println!("  Killed: {killed}, Failed: {failed}");
             }
         }
     }
@@ -463,7 +501,7 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
         for id in &stale_ids {
             store.sessions.remove(id);
         }
-        store.save()?;
+        store.save_with_lock(&file)?;
         println!("Removed {} stale session(s).", stale_ids.len());
     }
 
@@ -479,7 +517,9 @@ fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Get current TTY
+/// Get current TTY from environment variables.
+///
+/// TTY detection via env vars is unreliable. Falls back to None if TTY/SSH_TTY not set.
 fn get_current_tty() -> Option<String> {
     std::env::var("TTY")
         .or_else(|_| std::env::var("SSH_TTY"))
@@ -527,10 +567,8 @@ fn find_descendant_pids(sys: &System, parent_pids: &[u32]) -> Vec<u32> {
 }
 
 /// Kill a process using shared kill logic with configurable timeout
-fn kill_process(pid: u32) -> Result<()> {
-    // Use the shared kill module with default 5-second timeout
-    // Pass None for start_time since session tracking doesn't capture it yet
-    crate::kill::kill_process(pid, None, 5)?;
+fn kill_process(pid: u32, start_time: Option<u64>) -> Result<()> {
+    crate::kill::kill_process(pid, start_time, 5)?;
     Ok(())
 }
 
@@ -556,5 +594,53 @@ mod tests {
         let uuid2 = uuid_v4();
         // UUIDs should be different (with very high probability)
         assert_ne!(uuid1, uuid2);
+    }
+
+    #[test]
+    fn test_tracked_pid_deserialize_bare() {
+        let json = "42";
+        let tp: TrackedPid = serde_json::from_str(json).unwrap();
+        assert_eq!(tp.pid, 42);
+        assert_eq!(tp.start_time, None);
+    }
+
+    #[test]
+    fn test_tracked_pid_deserialize_full() {
+        let json = r#"{"pid": 42, "start_time": 1234567890}"#;
+        let tp: TrackedPid = serde_json::from_str(json).unwrap();
+        assert_eq!(tp.pid, 42);
+        assert_eq!(tp.start_time, Some(1234567890));
+    }
+
+    #[test]
+    fn test_tracked_pid_deserialize_full_no_start_time() {
+        let json = r#"{"pid": 42, "start_time": null}"#;
+        let tp: TrackedPid = serde_json::from_str(json).unwrap();
+        assert_eq!(tp.pid, 42);
+        assert_eq!(tp.start_time, None);
+    }
+
+    #[test]
+    fn test_session_backward_compat() {
+        // Simulate old format with bare u32 pids
+        let json = r#"{
+            "sessions": {
+                "test-session": {
+                    "id": "test-session",
+                    "name": null,
+                    "source": "terminal",
+                    "pids": [100, 200, 300],
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "tty": null,
+                    "parent_pid": null
+                }
+            }
+        }"#;
+        let store: SessionStore = serde_json::from_str(json).unwrap();
+        let session = store.sessions.get("test-session").unwrap();
+        assert_eq!(session.pids.len(), 3);
+        assert_eq!(session.pids[0].pid, 100);
+        assert_eq!(session.pids[0].start_time, None);
+        assert_eq!(session.pids[2].pid, 300);
     }
 }

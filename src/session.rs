@@ -151,6 +151,7 @@ impl SessionStore {
                 eprintln!("  Backup saved to: {}", backup_path.display());
 
                 // Backup the corrupt file
+                crate::util::check_not_symlink(&backup_path)?;
                 fs::copy(&path, &backup_path)
                     .with_context(|| format!("Failed to backup corrupt sessions file to: {}", backup_path.display()))?;
 
@@ -185,7 +186,9 @@ impl SessionStore {
         } else {
             serde_json::from_str(&content).unwrap_or_else(|_| {
                 // Corruption recovery - same as load()
-                let _ = std::fs::copy(&path, path.with_extension("json.bak"));
+                let bak_path = path.with_extension("json.bak");
+                crate::util::check_not_symlink(&bak_path).ok();
+                let _ = std::fs::copy(&path, &bak_path);
                 SessionStore {
                     sessions: HashMap::new(),
                 }
@@ -231,6 +234,11 @@ fn ensure_data_dir() -> Result<()> {
     let path = sessions_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
     Ok(())
 }
@@ -325,6 +333,11 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
         session.pids.len()
     );
 
+    // Load config for sigterm_timeout
+    let sigterm_timeout = crate::config::Config::load()
+        .map(|c| c.sigterm_timeout)
+        .unwrap_or(5);
+
     // Get current process list
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
@@ -358,7 +371,7 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
             let mut failed = 0;
             for pid in &pids_to_clean {
                 let st = start_time_map.get(pid).copied().flatten();
-                match kill_process(*pid, st) {
+                match kill_process(*pid, st, sigterm_timeout) {
                     Ok(_) => killed += 1,
                     Err(e) => {
                         failed += 1;
@@ -431,6 +444,11 @@ pub fn unregister(session_id: &str) -> Result<()> {
 pub fn auto_clean(dry_run: bool) -> Result<()> {
     let (mut store, file) = SessionStore::load_exclusive()?;
 
+    // Load config for sigterm_timeout
+    let sigterm_timeout = crate::config::Config::load()
+        .map(|c| c.sigterm_timeout)
+        .unwrap_or(5);
+
     // Find stale sessions first
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
@@ -482,7 +500,7 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
                 let mut failed = 0;
                 for pid in &pids_to_clean {
                     let st = start_time_map.get(pid).copied().flatten();
-                    match kill_process(*pid, st) {
+                    match kill_process(*pid, st, sigterm_timeout) {
                         Ok(_) => killed += 1,
                         Err(e) => {
                             failed += 1;
@@ -567,8 +585,8 @@ fn find_descendant_pids(sys: &System, parent_pids: &[u32]) -> Vec<u32> {
 }
 
 /// Kill a process using shared kill logic with configurable timeout
-fn kill_process(pid: u32, start_time: Option<u64>) -> Result<()> {
-    crate::kill::kill_process(pid, start_time, 5)?;
+fn kill_process(pid: u32, start_time: Option<u64>, sigterm_timeout: u64) -> Result<()> {
+    crate::kill::kill_process(pid, start_time, sigterm_timeout)?;
     Ok(())
 }
 

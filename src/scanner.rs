@@ -23,6 +23,7 @@ pub struct OrphanProcess {
 pub struct ScanResult {
     pub orphans: Vec<OrphanProcess>,
     pub orphan_count: usize,
+    pub cleaned_count: usize,
     pub executed: bool,
 }
 
@@ -175,13 +176,17 @@ pub fn scan_with_scanner(
 
     let orphan_count = orphans.len();
 
-    if execute && !orphans.is_empty() {
-        crate::cleaner::clean_all(&orphans, sigterm_timeout, false)?;
-    }
+    let cleaned_count = if execute && !orphans.is_empty() {
+        let results = crate::cleaner::clean_all(&orphans, sigterm_timeout, false)?;
+        results.iter().filter(|r| r.success).count()
+    } else {
+        0
+    };
 
     Ok(ScanResult {
         orphans,
         orphan_count,
+        cleaned_count,
         executed: execute,
     })
 }

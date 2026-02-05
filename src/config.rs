@@ -91,6 +91,37 @@ impl Config {
             );
         }
 
+        // Validate grace_period range
+        if self.grace_period > 3600 {
+            anyhow::bail!(
+                "grace_period must be between 0 and 3600 seconds, got {}",
+                self.grace_period
+            );
+        }
+
+        // Validate sigterm_timeout range
+        if self.sigterm_timeout == 0 || self.sigterm_timeout > 60 {
+            anyhow::bail!(
+                "sigterm_timeout must be between 1 and 60 seconds, got {}",
+                self.sigterm_timeout
+            );
+        }
+
+        // Validate pattern counts
+        if self.targets.len() > 100 {
+            anyhow::bail!("Too many target patterns (max 100, got {})", self.targets.len());
+        }
+        if self.whitelist.len() > 100 {
+            anyhow::bail!("Too many whitelist patterns (max 100, got {})", self.whitelist.len());
+        }
+
+        // Validate pattern lengths and compile regexes
+        for pattern in self.targets.iter().chain(self.whitelist.iter()) {
+            if pattern.len() > 1024 {
+                anyhow::bail!("Pattern too long (max 1024 chars): {}...", &pattern[..50.min(pattern.len())]);
+            }
+        }
+
         for pattern in &self.targets {
             Regex::new(pattern).with_context(|| format!("Invalid target pattern: {pattern}"))?;
         }

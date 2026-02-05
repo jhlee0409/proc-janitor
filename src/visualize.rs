@@ -734,7 +734,16 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         // Render process list
         const processList = document.getElementById('process-list');
         if (cleanableProcesses.length === 0) {{
-            processList.innerHTML = '<div class="empty-state"><div class="emoji">✨</div><div>No orphan processes found</div></div>';
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'empty-state';
+            const emojiDiv = document.createElement('div');
+            emojiDiv.className = 'emoji';
+            emojiDiv.textContent = '✨';
+            const textDiv = document.createElement('div');
+            textDiv.textContent = 'No orphan processes found';
+            emptyDiv.appendChild(emojiDiv);
+            emptyDiv.appendChild(textDiv);
+            processList.appendChild(emptyDiv);
         }} else {{
             cleanableProcesses.forEach(p => {{
                 const card = document.createElement('div');
@@ -747,7 +756,14 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
                 detailDiv.textContent = 'PID: ' + p.pid + ' | Memory: ' + p.memory.toFixed(1) + ' MB';
                 const badges = document.createElement('div');
                 badges.className = 'process-badges';
-                badges.innerHTML = '<span class="badge orphan">Orphan</span><span class="badge target">Target</span>';
+                const orphanBadge = document.createElement('span');
+                orphanBadge.className = 'badge orphan';
+                orphanBadge.textContent = 'Orphan';
+                const targetBadge = document.createElement('span');
+                targetBadge.className = 'badge target';
+                targetBadge.textContent = 'Target';
+                badges.appendChild(orphanBadge);
+                badges.appendChild(targetBadge);
                 card.appendChild(nameDiv);
                 card.appendChild(detailDiv);
                 card.appendChild(badges);
@@ -758,7 +774,16 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         // Render session list
         const sessionList = document.getElementById('session-list');
         if (sessions.length === 0) {{
-            sessionList.innerHTML = '<div class="empty-state"><div class="emoji">📭</div><div>No active sessions</div></div>';
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'empty-state';
+            const emojiDiv = document.createElement('div');
+            emojiDiv.className = 'emoji';
+            emojiDiv.textContent = '📭';
+            const textDiv = document.createElement('div');
+            textDiv.textContent = 'No active sessions';
+            emptyDiv.appendChild(emojiDiv);
+            emptyDiv.appendChild(textDiv);
+            sessionList.appendChild(emptyDiv);
         }} else {{
             sessions.forEach(s => {{
                 const card = document.createElement('div');

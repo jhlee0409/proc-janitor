@@ -57,7 +57,7 @@ pub enum Commands {
         live: bool,
 
         /// Refresh interval in seconds (used with --live, default: 5)
-        #[arg(long, default_value = "5")]
+        #[arg(long, default_value = "5", value_parser = clap::value_parser!(u64).range(1..=3600))]
         interval: u64,
     },
 

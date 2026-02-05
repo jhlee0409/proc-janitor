@@ -68,7 +68,7 @@ fn run() -> Result<()> {
                 }
 
                 if execute {
-                    println!("\nCleaned up {} process(es).", result.orphan_count);
+                    println!("\nCleaned up {} process(es).", result.cleaned_count);
                 } else if use_color() {
                     println!(
                         "\n{}",

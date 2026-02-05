@@ -123,7 +123,16 @@ fn get_pid_file_path() -> Result<PathBuf> {
 fn write_pid_file(pid: u32) -> Result<()> {
     let pid_file = get_pid_file_path()?;
     crate::util::check_not_symlink(&pid_file)?;
-    fs::write(&pid_file, pid.to_string()).context("Failed to write PID file")?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&pid_file)
+        .context("Failed to open PID file")?;
+    use std::io::Write;
+    file.write_all(pid.to_string().as_bytes())
+        .context("Failed to write PID file")?;
+    file.sync_all().context("Failed to sync PID file")?;
     Ok(())
 }
 
@@ -406,13 +415,19 @@ fn print_recent_logs(count: usize) {
 
     if let Some(entry) = entries.first() {
         if let Ok(file) = std::fs::File::open(entry.path()) {
+            use std::collections::VecDeque;
             use std::io::{BufRead, BufReader};
             let reader = BufReader::new(file);
-            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
-            let start = lines.len().saturating_sub(count);
-            if !lines[start..].is_empty() {
+            let mut last_lines: VecDeque<String> = VecDeque::with_capacity(count + 1);
+            for line in reader.lines().map_while(Result::ok) {
+                last_lines.push_back(line);
+                if last_lines.len() > count {
+                    last_lines.pop_front();
+                }
+            }
+            if !last_lines.is_empty() {
                 println!("\n  Recent logs:");
-                for line in &lines[start..] {
+                for line in &last_lines {
                     println!("    {line}");
                 }
             }
@@ -434,8 +449,7 @@ pub fn status(json: bool) -> Result<()> {
         };
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
-        let use_color = std::env::var("NO_COLOR").is_err()
-            && supports_color::on(supports_color::Stream::Stdout).is_some();
+        let use_color = crate::util::use_color();
 
         if running {
             if use_color {

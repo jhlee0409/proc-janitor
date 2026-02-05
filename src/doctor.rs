@@ -5,11 +5,7 @@ use std::fs;
 use crate::config;
 use crate::daemon;
 use crate::session::SessionStore;
-
-fn use_color() -> bool {
-    std::env::var("NO_COLOR").is_err()
-        && supports_color::on(supports_color::Stream::Stdout).is_some()
-}
+use crate::util::use_color;
 
 fn pass(label: &str, detail: &str) {
     if use_color() {
@@ -158,23 +154,31 @@ fn check_data_directory() -> bool {
 
     // Check if writable
     let test_file = data_dir.join(".write_test");
-    match fs::write(&test_file, b"test") {
-        Ok(_) => {
-            let _ = fs::remove_file(&test_file);
-            pass(
-                "Data directory",
-                &format!("{} exists and writable", data_dir.display()),
-            );
-            true
+    if crate::util::check_not_symlink(&test_file).is_ok() {
+        match fs::write(&test_file, b"test") {
+            Ok(_) => {
+                let _ = fs::remove_file(&test_file);
+                pass(
+                    "Data directory",
+                    &format!("{} exists and writable", data_dir.display()),
+                );
+                true
+            }
+            Err(_) => {
+                fail(
+                    "Data directory",
+                    &format!("{} exists but not writable", data_dir.display()),
+                    Some("Check directory permissions"),
+                );
+                false
+            }
         }
-        Err(_) => {
-            fail(
-                "Data directory",
-                &format!("{} exists but not writable", data_dir.display()),
-                Some("Check directory permissions"),
-            );
-            false
-        }
+    } else {
+        pass(
+            "Data directory",
+            &format!("{} exists (write test skipped: symlink check failed)", data_dir.display()),
+        );
+        true
     }
 }
 
@@ -202,23 +206,31 @@ fn check_log_directory() -> bool {
 
     // Check if writable
     let test_file = log_dir.join(".write_test");
-    match fs::write(&test_file, b"test") {
-        Ok(_) => {
-            let _ = fs::remove_file(&test_file);
-            pass(
-                "Log directory",
-                &format!("{} exists and writable", log_dir.display()),
-            );
-            true
+    if crate::util::check_not_symlink(&test_file).is_ok() {
+        match fs::write(&test_file, b"test") {
+            Ok(_) => {
+                let _ = fs::remove_file(&test_file);
+                pass(
+                    "Log directory",
+                    &format!("{} exists and writable", log_dir.display()),
+                );
+                true
+            }
+            Err(_) => {
+                fail(
+                    "Log directory",
+                    &format!("{} exists but not writable", log_dir.display()),
+                    Some("Check directory permissions"),
+                );
+                false
+            }
         }
-        Err(_) => {
-            fail(
-                "Log directory",
-                &format!("{} exists but not writable", log_dir.display()),
-                Some("Check directory permissions"),
-            );
-            false
-        }
+    } else {
+        pass(
+            "Log directory",
+            &format!("{} exists (write test skipped: symlink check failed)", log_dir.display()),
+        );
+        true
     }
 }
 

@@ -44,7 +44,7 @@ impl std::fmt::Display for SessionSource {
             SessionSource::Terminal => write!(f, "terminal"),
             SessionSource::VsCode => write!(f, "vscode"),
             SessionSource::Tmux => write!(f, "tmux"),
-            SessionSource::Custom(name) => write!(f, "{}", name),
+            SessionSource::Custom(name) => write!(f, "{name}"),
         }
     }
 }
@@ -110,10 +110,24 @@ impl SessionStore {
         file.unlock()
             .with_context(|| "Failed to release lock on sessions file")?;
 
-        let store: SessionStore =
-            serde_json::from_str(&content).with_context(|| "Failed to parse sessions file")?;
+        // Parse JSON with corruption recovery
+        match serde_json::from_str::<SessionStore>(&content) {
+            Ok(store) => Ok(store),
+            Err(_) => {
+                eprintln!("Warning: Sessions file is corrupted, backing up and creating fresh store.");
 
-        Ok(store)
+                // Create backup path
+                let backup_path = path.with_extension("json.corrupt");
+                eprintln!("  Backup saved to: {}", backup_path.display());
+
+                // Backup the corrupt file
+                fs::copy(&path, &backup_path)
+                    .with_context(|| format!("Failed to backup corrupt sessions file to: {}", backup_path.display()))?;
+
+                // Return fresh store so session subsystem continues working
+                Ok(Self::default())
+            }
+        }
     }
 
     /// Save session store to disk
@@ -121,7 +135,7 @@ impl SessionStore {
         ensure_data_dir()?;
         let path = sessions_path()?;
 
-        // Open file for exclusive lock FIRST (before writing anything)
+        // Open file for exclusive lock
         let file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -137,14 +151,15 @@ impl SessionStore {
         file.lock_exclusive()
             .with_context(|| "Failed to acquire exclusive lock on sessions file")?;
 
-        // Write to temp file UNDER the lock
-        let temp_path = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        // Serialize content
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(&temp_path, &content)?;
 
-        // Atomic rename
-        fs::rename(&temp_path, &path)
-            .with_context(|| "Failed to atomically update sessions file")?;
+        // Truncate and write directly under the lock
+        file.set_len(0)
+            .with_context(|| "Failed to truncate sessions file")?;
+        use std::io::Write;
+        (&file).write_all(content.as_bytes())
+            .with_context(|| "Failed to write sessions file")?;
 
         file.unlock()
             .with_context(|| "Failed to release lock on sessions file")?;
@@ -179,7 +194,7 @@ impl SessionStore {
             self.save()?;
             Ok(())
         } else {
-            bail!("Session not found: {}", session_id)
+            bail!("Session not found: {session_id}")
         }
     }
 
@@ -283,7 +298,7 @@ pub fn register(
     let mut store = SessionStore::load()?;
     store.register(session)?;
 
-    println!("Session registered: {}", session_id);
+    println!("Session registered: {session_id}");
     Ok(session_id)
 }
 
@@ -291,7 +306,7 @@ pub fn register(
 pub fn track(session_id: &str, pid: u32) -> Result<()> {
     let mut store = SessionStore::load()?;
     store.add_pid(session_id, pid)?;
-    println!("PID {} tracked under session {}", pid, session_id);
+    println!("PID {pid} tracked under session {session_id}");
     Ok(())
 }
 
@@ -301,7 +316,7 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
 
     let session = store
         .get(session_id)
-        .with_context(|| format!("Session not found: {}", session_id))?
+        .with_context(|| format!("Session not found: {session_id}"))?
         .clone();
 
     println!(
@@ -327,7 +342,7 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
         for pid in &pids_to_clean {
             if let Some(process) = sys.process(sysinfo::Pid::from_u32(*pid)) {
                 let name = process.name().to_string_lossy();
-                println!("  PID {} - {}", pid, name);
+                println!("  PID {pid} - {name}");
             }
         }
 
@@ -345,7 +360,7 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
     // Remove session from store
     if !dry_run {
         store.remove(session_id)?;
-        println!("Session {} removed.", session_id);
+        println!("Session {session_id} removed.");
     }
 
     Ok(())
@@ -366,7 +381,7 @@ pub fn list() -> Result<()> {
     for session in sessions {
         println!("  {} [{}]", session.id, session.source);
         if let Some(name) = &session.name {
-            println!("    Name: {}", name);
+            println!("    Name: {name}");
         }
         println!(
             "    Created: {}",
@@ -374,7 +389,7 @@ pub fn list() -> Result<()> {
         );
         println!("    Tracked PIDs: {:?}", session.pids);
         if let Some(tty) = &session.tty {
-            println!("    TTY: {}", tty);
+            println!("    TTY: {tty}");
         }
         println!();
     }
@@ -386,9 +401,9 @@ pub fn list() -> Result<()> {
 pub fn unregister(session_id: &str) -> Result<()> {
     let mut store = SessionStore::load()?;
     if store.remove(session_id)?.is_some() {
-        println!("Session {} unregistered.", session_id);
+        println!("Session {session_id} unregistered.");
     } else {
-        println!("Session {} not found.", session_id);
+        println!("Session {session_id} not found.");
     }
     Ok(())
 }
@@ -426,7 +441,7 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
 
     // Clean processes for each stale session
     for id in &stale_ids {
-        println!("  {}", id);
+        println!("  {id}");
         if !dry_run {
             if let Err(e) = clean_session(id, false) {
                 tracing::warn!("Failed to clean session {}: {}", id, e);

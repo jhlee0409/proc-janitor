@@ -46,7 +46,7 @@ pub fn process_exists(pid: u32) -> bool {
 pub fn kill_process(pid: u32, start_time: Option<u64>, sigterm_timeout_secs: u64) -> Result<Signal> {
     // Guard against killing system-critical processes
     if SYSTEM_PIDS.contains(&pid) {
-        bail!("Refusing to kill system process (PID {})", pid);
+        bail!("Refusing to kill system process (PID {pid})");
     }
 
     // Safe PID conversion
@@ -56,7 +56,7 @@ pub fn kill_process(pid: u32, start_time: Option<u64>, sigterm_timeout_secs: u64
     // Verify process identity if start_time is provided
     if let Some(st) = start_time {
         if !verify_process_identity(pid, st) {
-            bail!("Process {} identity changed (possible PID reuse), skipping kill", pid);
+            bail!("Process {pid} identity changed (possible PID reuse), skipping kill");
         }
     } else {
         // No start_time: at least verify process exists
@@ -70,30 +70,44 @@ pub fn kill_process(pid: u32, start_time: Option<u64>, sigterm_timeout_secs: u64
         Ok(()) => {}
         Err(Errno::ESRCH) => return Ok(Signal::SIGTERM), // Already exited
         Err(e) => {
-            return Err(e).with_context(|| format!("Failed to send SIGTERM to PID {}", pid));
+            return Err(e).with_context(|| format!("Failed to send SIGTERM to PID {pid}"));
         }
     }
 
-    // Wait for graceful shutdown
-    thread::sleep(Duration::from_secs(sigterm_timeout_secs));
+    // Poll for graceful shutdown instead of sleeping full timeout
+    let poll_interval = Duration::from_millis(100);
+    let deadline = Duration::from_secs(sigterm_timeout_secs);
+    let mut elapsed = Duration::ZERO;
 
-    // Check if still alive; if so, escalate to SIGKILL
-    match kill(nix_pid, None) {
-        Ok(()) => {
-            // Process still alive, force kill
-            match kill(nix_pid, Signal::SIGKILL) {
-                Ok(()) => {}
-                Err(Errno::ESRCH) => return Ok(Signal::SIGTERM),
-                Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("Failed to send SIGKILL to PID {}", pid));
+    let still_alive = loop {
+        thread::sleep(poll_interval);
+        elapsed += poll_interval;
+
+        // Check if process has exited
+        match kill(nix_pid, None) {
+            Err(Errno::ESRCH) => break false, // Process exited
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to check if PID {pid} is still alive"));
+            }
+            Ok(()) => {
+                if elapsed >= deadline {
+                    break true; // Timeout reached, still alive
                 }
             }
-            Ok(Signal::SIGKILL)
         }
-        Err(Errno::ESRCH) => Ok(Signal::SIGTERM), // Exited after SIGTERM
-        Err(e) => {
-            Err(e).with_context(|| format!("Failed to check if PID {} is still alive", pid))
+    };
+
+    if still_alive {
+        // Process still alive, force kill
+        match kill(nix_pid, Signal::SIGKILL) {
+            Ok(()) => Ok(Signal::SIGKILL),
+            Err(Errno::ESRCH) => Ok(Signal::SIGTERM),
+            Err(e) => {
+                Err(e).with_context(|| format!("Failed to send SIGKILL to PID {pid}"))
+            }
         }
+    } else {
+        Ok(Signal::SIGTERM) // Exited after SIGTERM
     }
 }

@@ -4,6 +4,7 @@
 //! proc-janitor targets.
 
 use anyhow::Result;
+use owo_colors::OwoColorize;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -12,6 +13,12 @@ use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
 use crate::config::Config;
 use crate::session::SessionStore;
+
+/// Escape JSON for safe embedding inside HTML <script> tags.
+/// Prevents XSS via `</script>` breakout by replacing `</` with `<\/`.
+fn escape_json_for_script(json: &str) -> String {
+    json.replace("</", "<\\/")
+}
 
 /// Process info for visualization
 #[derive(Debug, Clone)]
@@ -52,7 +59,7 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
         .filter_map(|p| match Regex::new(p) {
             Ok(re) => Some(re),
             Err(e) => {
-                eprintln!("Warning: Invalid target pattern '{}': {}", p, e);
+                eprintln!("Warning: Invalid target pattern '{p}': {e}");
                 None
             }
         })
@@ -63,7 +70,7 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
         .filter_map(|p| match Regex::new(p) {
             Ok(re) => Some(re),
             Err(e) => {
-                eprintln!("Warning: Invalid whitelist pattern '{}': {}", p, e);
+                eprintln!("Warning: Invalid whitelist pattern '{p}': {e}");
                 None
             }
         })
@@ -173,7 +180,7 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
             for (i, &pid) in init_children.iter().enumerate() {
                 if let Some(node) = nodes.get(&pid) {
                     // Skip non-interesting processes unless they're targets
-                    if !(node.is_target && !node.is_whitelisted)
+                    if (!node.is_target || node.is_whitelisted)
                         && !has_target_descendant(pid, &children, &nodes)
                     {
                         continue;
@@ -235,7 +242,7 @@ fn print_subtree(
     nodes: &HashMap<u32, ProcessNode>,
 ) {
     let connector = if is_last { "└── " } else { "├── " };
-    print_node(node, &format!("{}{}", prefix, connector));
+    print_node(node, &format!("{prefix}{connector}"));
 
     let new_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
 
@@ -261,6 +268,11 @@ fn print_subtree(
     }
 }
 
+fn use_color() -> bool {
+    std::env::var("NO_COLOR").is_err()
+        && supports_color::on(supports_color::Stream::Stdout).is_some()
+}
+
 fn print_node(
     node: &ProcessNode,
     prefix: &str,
@@ -279,19 +291,23 @@ fn print_node(
         markers.push('📎');
     }
 
-    let mem_str = if node.memory_mb > 100.0 {
-        format!("\x1b[91m{:>6.1}MB\x1b[0m", node.memory_mb) // Red for high memory
-    } else if node.memory_mb > 50.0 {
-        format!("\x1b[93m{:>6.1}MB\x1b[0m", node.memory_mb) // Yellow
+    let mem_str = if use_color() {
+        if node.memory_mb > 100.0 {
+            format!("{:>6.1}MB", node.memory_mb).red().to_string()
+        } else if node.memory_mb > 50.0 {
+            format!("{:>6.1}MB", node.memory_mb).yellow().to_string()
+        } else {
+            format!("{:>6.1}MB", node.memory_mb)
+        }
     } else {
         format!("{:>6.1}MB", node.memory_mb)
     };
 
-    let name_colored = if node.is_target && !node.is_whitelisted {
+    let name_colored = if use_color() && node.is_target && !node.is_whitelisted {
         if node.is_orphan {
-            format!("\x1b[91m{}\x1b[0m", node.name) // Red for cleanable
+            node.name.red().to_string()
         } else {
-            format!("\x1b[93m{}\x1b[0m", node.name) // Yellow for target
+            node.name.yellow().to_string()
         }
     } else {
         node.name.clone()
@@ -304,6 +320,9 @@ fn print_node(
 }
 
 fn truncate(s: &str, max_len: usize) -> String {
+    if max_len < 4 {
+        return s.chars().take(max_len).collect();
+    }
     if s.chars().count() > max_len {
         format!("{}...", s.chars().take(max_len - 3).collect::<String>())
     } else {
@@ -390,7 +409,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
             targets.iter().any(|t| t.pid == *pid || t.pid == *ppid)
                 || parent_nodes.iter().any(|p| p.pid == *ppid)
         })
-        .map(|(from, to)| format!(r#"{{"from": {}, "to": {}}}"#, from, to))
+        .map(|(from, to)| format!(r#"{{"from": {from}, "to": {to}}}"#))
         .collect();
     let edges_json_str = edges_json.join(",\n        ");
 
@@ -410,11 +429,16 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         .collect();
     let sessions_json_str = sessions_json.join(",\n        ");
 
+    // Escape all JSON for safe embedding in <script> tags (prevent </script> breakout)
+    let all_nodes_json = escape_json_for_script(&all_nodes_json);
+    let edges_json_str = escape_json_for_script(&edges_json_str);
+    let sessions_json_str = escape_json_for_script(&sessions_json_str);
+
     // Stats
     let total_memory: f64 = orphan_targets.iter().map(|n| n.memory_mb).sum();
 
     let refresh_meta = match refresh_secs {
-        Some(secs) => format!(r#"<meta http-equiv="refresh" content="{}">"#, secs),
+        Some(secs) => format!(r#"<meta http-equiv="refresh" content="{secs}">"#),
         None => String::new(),
     };
 
@@ -726,15 +750,17 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         all_nodes_json,
         edges_json_str,
         sessions_json_str,
-        orphan_targets
-            .iter()
-            .map(|n| serde_json::json!({
-                "pid": n.pid,
-                "name": n.name,
-                "memory": n.memory_mb
-            }).to_string())
-            .collect::<Vec<_>>()
-            .join(",\n        ")
+        escape_json_for_script(
+            &orphan_targets
+                .iter()
+                .map(|n| serde_json::json!({
+                    "pid": n.pid,
+                    "name": n.name,
+                    "memory": n.memory_mb
+                }).to_string())
+                .collect::<Vec<_>>()
+                .join(",\n        ")
+        )
     );
 
     // Write to temp file
@@ -788,8 +814,7 @@ pub fn open_dashboard(live: bool, interval: u64) -> Result<()> {
 
     if live {
         println!(
-            "Live mode: refreshing every {}s. Press Ctrl+C to stop.",
-            interval
+            "Live mode: refreshing every {interval}s. Press Ctrl+C to stop."
         );
         loop {
             std::thread::sleep(std::time::Duration::from_secs(interval));

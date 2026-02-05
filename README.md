@@ -94,7 +94,7 @@ proc-janitor --json scan
 
 ## Configuration
 
-Config file: `~/.config/proc-janitor/config.toml`
+Config file: `~/.config/proc-janitor/config.toml` (all platforms)
 
 ```toml
 # How often to scan (seconds)
@@ -121,7 +121,7 @@ whitelist = [
 
 [logging]
 enabled = true
-path = "~/.proc-janitor/logs"
+path = "/Users/you/.proc-janitor/logs"  # absolute path required (~ not expanded)
 retention_days = 7
 ```
 
@@ -129,18 +129,20 @@ Edit with: `proc-janitor config edit`
 
 ### Environment Variable Overrides
 
-Every config option can be overridden via environment variables:
+Every config option can be overridden via environment variables. Values outside the valid range are rejected with a warning and the default is kept.
 
-```bash
-PROC_JANITOR_SCAN_INTERVAL=10
-PROC_JANITOR_GRACE_PERIOD=60
-PROC_JANITOR_SIGTERM_TIMEOUT=15
-PROC_JANITOR_TARGETS="python.*test,node.*dev"
-PROC_JANITOR_WHITELIST="safe1,safe2"
-PROC_JANITOR_LOG_ENABLED=false
-PROC_JANITOR_LOG_PATH="/custom/path"
-PROC_JANITOR_LOG_RETENTION_DAYS=14
-```
+| Variable | Valid Range | Example |
+|----------|------------|---------|
+| `PROC_JANITOR_SCAN_INTERVAL` | 1–3600 | `10` |
+| `PROC_JANITOR_GRACE_PERIOD` | 0–3600 | `60` |
+| `PROC_JANITOR_SIGTERM_TIMEOUT` | 1–60 | `15` |
+| `PROC_JANITOR_TARGETS` | comma-separated regexes | `"python.*test,node.*dev"` |
+| `PROC_JANITOR_WHITELIST` | comma-separated regexes | `"safe1,safe2"` |
+| `PROC_JANITOR_LOG_ENABLED` | `true` / `false` | `false` |
+| `PROC_JANITOR_LOG_PATH` | path under `$HOME` | `"/Users/you/.proc-janitor/logs"` |
+| `PROC_JANITOR_LOG_RETENTION_DAYS` | 0–365 | `14` |
+
+`PROC_JANITOR_LOG_PATH` is validated for safety: directory traversal (`..`), system paths (`/etc/`, `/usr/`, etc.), and paths outside `$HOME` are rejected.
 
 ## CLI Reference
 
@@ -160,7 +162,7 @@ PROC_JANITOR_LOG_RETENTION_DAYS=14
 | `scan [--execute]` | Scan for orphans (dry-run by default) |
 | `clean [--dry-run]` | Kill orphaned target processes |
 | `tree [--targets-only]` | Visualize process tree |
-| `dashboard` | Open browser-based dashboard |
+| `dashboard [--live] [--interval N]` | Open browser-based dashboard (live mode auto-refreshes every N seconds, default 5) |
 | `logs [-n N] [--follow]` | View logs |
 
 ### Config Commands
@@ -232,6 +234,7 @@ proc-janitor/
 │   ├── daemon.rs      # Daemon lifecycle (start/stop/status)
 │   ├── scanner.rs     # Orphan process detection
 │   ├── cleaner.rs     # Process termination (SIGTERM/SIGKILL)
+│   ├── kill.rs        # Shared kill logic (system PID guard, PID reuse check)
 │   ├── config.rs      # TOML config + env var overrides
 │   ├── logger.rs      # Structured logging with rotation
 │   ├── session.rs     # Session-based process tracking

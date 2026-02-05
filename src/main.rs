@@ -87,8 +87,8 @@ fn main() -> Result<()> {
             visualize::print_tree(targets_only)?;
         }
 
-        Commands::Dashboard => {
-            visualize::open_dashboard()?;
+        Commands::Dashboard { live, interval } => {
+            visualize::open_dashboard(live, interval)?;
         }
 
         Commands::Config(config_cmd) => match config_cmd {

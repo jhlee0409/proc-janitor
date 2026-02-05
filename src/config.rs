@@ -254,10 +254,11 @@ impl Config {
     }
 }
 
-/// Get the configuration file path
+/// Get the configuration file path (~/.config/proc-janitor/config.toml on all platforms)
 pub fn config_path() -> Result<PathBuf> {
-    Ok(dirs::config_dir()
-        .ok_or_else(|| anyhow::anyhow!("Config directory not found"))?
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
+    Ok(home
+        .join(".config")
         .join("proc-janitor")
         .join("config.toml"))
 }

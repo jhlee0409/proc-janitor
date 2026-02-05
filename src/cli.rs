@@ -50,7 +50,15 @@ pub enum Commands {
     },
 
     /// Open interactive dashboard in browser
-    Dashboard,
+    Dashboard {
+        /// Auto-refresh mode: regenerate dashboard periodically
+        #[arg(long)]
+        live: bool,
+
+        /// Refresh interval in seconds (used with --live, default: 5)
+        #[arg(long, default_value = "5")]
+        interval: u64,
+    },
 
     /// Configuration management
     #[command(subcommand)]

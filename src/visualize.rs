@@ -173,7 +173,9 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
             for (i, &pid) in init_children.iter().enumerate() {
                 if let Some(node) = nodes.get(&pid) {
                     // Skip non-interesting processes unless they're targets
-                    if !node.is_target && !has_target_descendant(pid, &children, &nodes) {
+                    if !(node.is_target && !node.is_whitelisted)
+                        && !has_target_descendant(pid, &children, &nodes)
+                    {
                         continue;
                     }
                     let is_last = i == len - 1;
@@ -211,7 +213,7 @@ fn has_target_descendant(
     nodes: &HashMap<u32, ProcessNode>,
 ) -> bool {
     if let Some(node) = nodes.get(&pid) {
-        if node.is_target {
+        if node.is_target && !node.is_whitelisted {
             return true;
         }
     }
@@ -241,7 +243,10 @@ fn print_subtree(
         let interesting_children: Vec<_> = child_pids
             .iter()
             .filter(|&&pid| {
-                nodes.get(&pid).map(|n| n.is_target).unwrap_or(false)
+                nodes
+                    .get(&pid)
+                    .map(|n| n.is_target && !n.is_whitelisted)
+                    .unwrap_or(false)
                     || has_target_descendant(pid, children, nodes)
             })
             .collect();
@@ -310,8 +315,8 @@ fn truncate(s: &str, max_len: usize) -> String {
 // HTML Dashboard
 // ============================================================================
 
-/// Generate HTML dashboard
-pub fn generate_dashboard() -> Result<PathBuf> {
+/// Generate HTML dashboard. If `refresh_secs` is Some, adds auto-refresh meta tag.
+pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
     let config = Config::load()?;
     let nodes = build_process_tree(&config)?;
     let session_store = SessionStore::load().unwrap_or_default();
@@ -408,14 +413,20 @@ pub fn generate_dashboard() -> Result<PathBuf> {
     // Stats
     let total_memory: f64 = orphan_targets.iter().map(|n| n.memory_mb).sum();
 
+    let refresh_meta = match refresh_secs {
+        Some(secs) => format!(r#"<meta http-equiv="refresh" content="{}">"#, secs),
+        None => String::new(),
+    };
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {}
     <title>proc-janitor Dashboard</title>
-    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js" integrity="sha384-OrA3tQDSHkPYtkfOSPGKkXik9gAWHb39oFSi0NN3rWsrDP8mxIQJMYi13B/+lDpf" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -706,6 +717,7 @@ pub fn generate_dashboard() -> Result<PathBuf> {
     </script>
 </body>
 </html>"#,
+        refresh_meta,
         nodes.len(),
         targets.len(),
         orphan_targets.len(),
@@ -760,9 +772,10 @@ fn is_ancestor(potential_ancestor: u32, target: u32, nodes: &HashMap<u32, Proces
     false
 }
 
-/// Open dashboard in browser
-pub fn open_dashboard() -> Result<()> {
-    let path = generate_dashboard()?;
+/// Open dashboard in browser. If `live` is true, regenerate the HTML every `interval` seconds.
+pub fn open_dashboard(live: bool, interval: u64) -> Result<()> {
+    let refresh_secs = if live { Some(interval) } else { None };
+    let path = generate_dashboard(refresh_secs)?;
 
     println!("Dashboard generated: {}", path.display());
     println!("Opening in browser...");
@@ -772,6 +785,17 @@ pub fn open_dashboard() -> Result<()> {
 
     #[cfg(target_os = "linux")]
     std::process::Command::new("xdg-open").arg(&path).spawn()?;
+
+    if live {
+        println!(
+            "Live mode: refreshing every {}s. Press Ctrl+C to stop.",
+            interval
+        );
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(interval));
+            generate_dashboard(refresh_secs)?;
+        }
+    }
 
     Ok(())
 }

@@ -167,8 +167,10 @@ impl SessionStore {
                 session.pids.push(pid);
             }
             self.save()?;
+            Ok(())
+        } else {
+            bail!("Session not found: {}", session_id)
         }
-        Ok(())
     }
 
     /// Clean up stale sessions (parent process no longer exists)

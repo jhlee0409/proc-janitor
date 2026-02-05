@@ -92,7 +92,7 @@ proc-janitor -j scan
 Config file: `~/.config/proc-janitor/config.toml` (all platforms)
 
 ```toml
-# How often to scan (seconds)
+# How often to scan (seconds, 1–3600)
 scan_interval = 5
 
 # Wait time before killing a new orphan (seconds)
@@ -137,7 +137,7 @@ Every config option can be overridden via environment variables. Values outside 
 | `PROC_JANITOR_LOG_PATH` | path under `$HOME` | `"/Users/you/.proc-janitor/logs"` |
 | `PROC_JANITOR_LOG_RETENTION_DAYS` | 0–365 | `14` |
 
-`PROC_JANITOR_LOG_PATH` is validated for safety: directory traversal (`..`), system paths (`/etc/`, `/usr/`, etc.), and paths outside `$HOME` are rejected.
+`PROC_JANITOR_LOG_PATH` is validated for safety: directory traversal (`..`), system paths (`/etc/`, `/usr/`, etc.), and paths outside `$HOME` are rejected. `/var/log/` is allowed as a standard log location.
 
 ## CLI Reference
 
@@ -158,7 +158,7 @@ Every config option can be overridden via environment variables. Values outside 
 | `clean [-d\|--dry-run]` | Kill orphaned target processes |
 | `tree [-t\|--targets-only]` | Visualize process tree |
 | `dashboard [-l\|--live] [--interval N]` | Open browser-based dashboard (live mode auto-refreshes every N seconds, default 5) |
-| `logs [-f\|--follow] [-n N]` | View logs |
+| `logs [-f\|--follow] [-n N]` | View logs (N: 1–10000, default 50) |
 | `doctor` | Diagnose common issues and check system health |
 | `completions <shell>` | Generate shell completions (`bash`, `zsh`, `fish`, `powershell`) |
 
@@ -168,12 +168,12 @@ Every config option can be overridden via environment variables. Values outside 
 |---------|-------------|
 | `config init [--force] [--preset NAME] [-y\|--yes]` | Create config (auto-detects orphans, or use preset: `claude`, `dev`, `minimal`). Use `--yes` to skip prompts. `--list-presets` to see available presets. |
 | `config show` | Display current config |
-| `config edit` | Edit config in `$EDITOR` (validates after save) |
+| `config edit` | Edit config in `$EDITOR` (validates after save, supports flags like `code --wait`) |
 | `config env` | Show all environment variable overrides with current values |
 
 ### Session Commands
 
-Track related processes as a group:
+Track related processes as a group. Each tracked PID stores its start_time for PID reuse detection — session cleanup verifies process identity before sending signals, even hours after registration.
 
 ```bash
 proc-janitor session register --name "my-session" --source terminal
@@ -204,9 +204,13 @@ launchctl unload ~/Library/LaunchAgents/com.proc-janitor.plist
 - **Whitelist protection** — matching processes are never killed
 - **System PID guard** — PIDs 0, 1, 2 are always protected
 - **Grace period** — orphans get time to self-cleanup before termination
-- **PID reuse mitigation** — verifies process identity before sending signals
+- **PID reuse mitigation** — verifies process identity (start_time) before sending signals, including session-tracked PIDs
+- **Daemon identity verification** — `stop` confirms the PID file points to an actual proc-janitor process before sending signals
+- **Symlink protection** — refuses to write to symlinks at predictable paths (`~/.proc-janitor/`), preventing local symlink attacks
+- **TOCTOU-safe session store** — exclusive file lock held across full read-modify-write cycle
 - **Dry-run mode** — preview cleanup without executing
-- **Atomic file operations** — config and session data use file locking
+- **Atomic file operations** — config and session data use file locking with fsync for crash safety
+- **Directory permissions** — `~/.proc-janitor/` created with `0o700` (owner-only access)
 - **Audit logging** — every action is logged with timestamps
 
 ## Architecture
@@ -220,11 +224,12 @@ proc-janitor/
 │   ├── scanner.rs     # Orphan process detection
 │   ├── cleaner.rs     # Process termination (SIGTERM/SIGKILL)
 │   ├── kill.rs        # Shared kill logic (system PID guard, PID reuse check, polling)
-│   ├── doctor.rs      # Health checks and diagnostics
+│   ├── doctor.rs      # Health checks and diagnostics (8 checks)
 │   ├── config.rs      # TOML config + env var overrides + presets
 │   ├── config_template.toml  # Commented config template (embedded at compile time)
 │   ├── logger.rs      # Structured logging with rotation
-│   ├── session.rs     # Session-based process tracking
+│   ├── session.rs     # Session-based process tracking (TrackedPid with start_time)
+│   ├── util.rs        # Shared utilities (color detection, symlink protection)
 │   └── visualize.rs   # ASCII tree + HTML dashboard
 ├── resources/
 │   └── com.proc-janitor.plist  # LaunchAgent template

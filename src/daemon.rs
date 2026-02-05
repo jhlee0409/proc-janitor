@@ -166,7 +166,6 @@ pub fn daemonize() -> Result<()> {
 
     let stdout_file = daemon_dir.join("daemon.out");
     let stderr_file = daemon_dir.join("daemon.err");
-    let pid_file = daemon_dir.join("proc-janitor.pid");
 
     let stdout = fs::File::create(&stdout_file)
         .context("Failed to create stdout file")?;
@@ -174,7 +173,6 @@ pub fn daemonize() -> Result<()> {
         .context("Failed to create stderr file")?;
 
     let daemonize = Daemonize::new()
-        .pid_file(&pid_file)
         .working_directory(&daemon_dir)
         .stdout(stdout)
         .stderr(stderr);

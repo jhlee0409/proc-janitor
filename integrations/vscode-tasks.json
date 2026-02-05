@@ -1,0 +1,67 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "proc-janitor: Register Session",
+      "type": "shell",
+      "command": "proc-janitor",
+      "args": [
+        "session",
+        "register",
+        "--source",
+        "vscode",
+        "--name",
+        "${workspaceFolderBasename}"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "runOptions": {
+        "runOn": "folderOpen"
+      }
+    },
+    {
+      "label": "proc-janitor: Clean Session",
+      "type": "shell",
+      "command": "proc-janitor",
+      "args": [
+        "session",
+        "auto-clean"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "proc-janitor: List Sessions",
+      "type": "shell",
+      "command": "proc-janitor",
+      "args": [
+        "session",
+        "list"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "proc-janitor: Scan Orphans",
+      "type": "shell",
+      "command": "proc-janitor",
+      "args": [
+        "scan"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    }
+  ]
+}

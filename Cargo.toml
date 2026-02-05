@@ -1,0 +1,54 @@
+[package]
+name = "proc-janitor"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jack <jhlee0409@users.noreply.github.com>"]
+description = "Automatic orphan process cleaner daemon for macOS/Linux"
+license = "MIT"
+repository = "https://github.com/jhlee0409/proc-janitor"
+homepage = "https://github.com/jhlee0409/proc-janitor"
+readme = "README.md"
+keywords = ["process", "daemon", "cleanup", "orphan", "macos"]
+categories = ["command-line-utilities", "os"]
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Process management
+sysinfo = "0.31"
+nix = { version = "0.29", features = ["signal", "process"] }
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Utilities
+anyhow = "1"
+dirs = "5"
+regex = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde_json = "1"
+fs2 = "0.4"
+
+# Daemon
+daemonize = "0.5"
+
+# Signal handling
+ctrlc = { version = "3", features = ["termination"] }
+
+[dev-dependencies]
+tempfile = "3"
+filetime = "0.2"
+serial_test = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

@@ -51,7 +51,6 @@ impl Daemon {
             .unwrap_or_else(|e| e.into_inner());
     }
 
-
     pub fn start(&mut self) -> Result<()> {
         // Initialize logger
         if let Err(e) = logger::init_logger() {
@@ -97,13 +96,11 @@ impl Daemon {
         println!("Daemon stopped.");
         Ok(())
     }
-
 }
 
 /// Get the PID file path
 fn get_pid_file_path() -> Result<PathBuf> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
     let pid_dir = home.join(".proc-janitor");
 
     // Create directory if it doesn't exist
@@ -166,8 +163,7 @@ pub fn is_daemon_running() -> bool {
 
 /// Daemonize the process
 pub fn daemonize() -> Result<()> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
     let daemon_dir = home.join(".proc-janitor");
 
     // Create directory if it doesn't exist
@@ -183,8 +179,8 @@ pub fn daemonize() -> Result<()> {
     let stdout_file = daemon_dir.join("daemon.out");
     let stderr_file = daemon_dir.join("daemon.err");
 
-    use std::os::unix::fs::OpenOptionsExt;
     use nix::libc;
+    use std::os::unix::fs::OpenOptionsExt;
 
     let stdout = OpenOptions::new()
         .create(true)
@@ -302,7 +298,7 @@ pub fn stop() -> Result<()> {
 
         // Verify PID identity before sending signals
         {
-            use sysinfo::{ProcessRefreshKind, RefreshKind, System, ProcessesToUpdate};
+            use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
             let mut sys = System::new_with_specifics(
                 RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
             );
@@ -314,7 +310,9 @@ pub fn stop() -> Result<()> {
                     bail!(
                         "PID {} is not proc-janitor (found: '{}'). PID file may be stale. \
                          Remove {} manually if the daemon is not running.",
-                        pid, name, get_pid_file_path().unwrap_or_default().display()
+                        pid,
+                        name,
+                        get_pid_file_path().unwrap_or_default().display()
                     );
                 }
             }
@@ -372,10 +370,11 @@ pub fn stop() -> Result<()> {
 /// Get daemon uptime as a human-readable string
 fn get_daemon_uptime(pid: u32) -> Option<String> {
     use sysinfo::{ProcessRefreshKind, RefreshKind, System};
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-    );
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
+    let mut sys =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(
+        pid,
+    )]));
 
     let process = sys.process(sysinfo::Pid::from_u32(pid))?;
     let start_time = process.start_time();
@@ -463,7 +462,11 @@ pub fn status(json: bool) -> Result<()> {
 
         if running {
             if use_color {
-                println!("{} proc-janitor daemon ({})", "●".green(), "running".green());
+                println!(
+                    "{} proc-janitor daemon ({})",
+                    "●".green(),
+                    "running".green()
+                );
             } else {
                 println!("● proc-janitor daemon (running)");
             }
@@ -479,25 +482,43 @@ pub fn status(json: bool) -> Result<()> {
 
             // Show config summary
             if let Ok(config) = crate::config::Config::load() {
-                println!("  Patterns: {} target(s), {} whitelisted", config.targets.len(), config.whitelist.len());
-                println!("  Scan interval: {}s | Grace period: {}s", config.scan_interval, config.grace_period);
+                println!(
+                    "  Patterns: {} target(s), {} whitelisted",
+                    config.targets.len(),
+                    config.whitelist.len()
+                );
+                println!(
+                    "  Scan interval: {}s | Grace period: {}s",
+                    config.scan_interval, config.grace_period
+                );
             }
 
             // Show last few log lines
             print_recent_logs(3);
         } else {
             if use_color {
-                println!("{} proc-janitor daemon ({})", "●".dimmed(), "stopped".dimmed());
+                println!(
+                    "{} proc-janitor daemon ({})",
+                    "●".dimmed(),
+                    "stopped".dimmed()
+                );
             } else {
                 println!("● proc-janitor daemon (stopped)");
             }
             if stale_pid_file {
                 if use_color {
-                    println!("  {}", "Stale PID file found - daemon may have crashed".yellow());
-                    println!("  Fix: Run 'proc-janitor stop' to clean up, then 'proc-janitor start'");
+                    println!(
+                        "  {}",
+                        "Stale PID file found - daemon may have crashed".yellow()
+                    );
+                    println!(
+                        "  Fix: Run 'proc-janitor stop' to clean up, then 'proc-janitor start'"
+                    );
                 } else {
                     println!("  Stale PID file found - daemon may have crashed");
-                    println!("  Fix: Run 'proc-janitor stop' to clean up, then 'proc-janitor start'");
+                    println!(
+                        "  Fix: Run 'proc-janitor stop' to clean up, then 'proc-janitor start'"
+                    );
                 }
             } else {
                 println!("  Start with: proc-janitor start");

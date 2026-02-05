@@ -306,10 +306,7 @@ fn print_subtree(
     }
 }
 
-fn print_node(
-    node: &ProcessNode,
-    prefix: &str,
-) {
+fn print_node(node: &ProcessNode, prefix: &str) {
     let mut markers = String::new();
     if node.is_target && !node.is_whitelisted {
         markers.push('🎯');
@@ -429,7 +426,8 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
                 "color": "#95a5a6",
                 "shape": "dot",
                 "size": 15
-            }).to_string()
+            })
+            .to_string()
         })
         .collect();
 
@@ -457,7 +455,8 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
                 "source": escape_html(&s.source.to_string()),
                 "pids": s.pids.iter().map(|tp| tp.pid).collect::<Vec<u32>>(),
                 "created": s.created_at.format("%Y-%m-%d %H:%M:%S").to_string()
-            }).to_string()
+            })
+            .to_string()
         })
         .collect();
     let sessions_json_str = sessions_json.join(",\n        ");
@@ -832,7 +831,8 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
                     "pid": n.pid,
                     "name": escape_html(&n.name),
                     "memory": n.memory_mb
-                }).to_string())
+                })
+                .to_string())
                 .collect::<Vec<_>>()
                 .join(",\n        ")
         )
@@ -912,13 +912,13 @@ pub fn open_dashboard(live: bool, interval: u64) -> Result<()> {
         .is_ok();
 
         if !handler_set {
-            eprintln!("Warning: Could not set Ctrl+C handler (already registered by another component).");
+            eprintln!(
+                "Warning: Could not set Ctrl+C handler (already registered by another component)."
+            );
             eprintln!("  Live mode will stop automatically. Use 'kill' to force stop.");
         }
 
-        println!(
-            "Live mode: refreshing every {interval}s. Press Ctrl+C to stop."
-        );
+        println!("Live mode: refreshing every {interval}s. Press Ctrl+C to stop.");
         while running.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_secs(interval));
             if !running.load(Ordering::SeqCst) {
@@ -970,10 +970,7 @@ mod tests {
 
     #[test]
     fn test_escape_json_for_script_multiple() {
-        assert_eq!(
-            escape_json_for_script("a</b</c"),
-            "a<\\/b<\\/c"
-        );
+        assert_eq!(escape_json_for_script("a</b</c"), "a<\\/b<\\/c");
     }
 
     #[test]
@@ -1008,21 +1005,51 @@ mod tests {
     #[test]
     fn test_is_ancestor_direct() {
         let mut nodes = HashMap::new();
-        nodes.insert(1, ProcessNode {
-            pid: 1, ppid: 0, name: "init".into(), cmdline: "".into(),
-            memory_mb: 0.0, cpu_percent: 0.0, is_target: false,
-            is_whitelisted: false, is_orphan: false, session_id: None,
-        });
-        nodes.insert(100, ProcessNode {
-            pid: 100, ppid: 1, name: "parent".into(), cmdline: "".into(),
-            memory_mb: 0.0, cpu_percent: 0.0, is_target: false,
-            is_whitelisted: false, is_orphan: true, session_id: None,
-        });
-        nodes.insert(200, ProcessNode {
-            pid: 200, ppid: 100, name: "child".into(), cmdline: "".into(),
-            memory_mb: 0.0, cpu_percent: 0.0, is_target: true,
-            is_whitelisted: false, is_orphan: false, session_id: None,
-        });
+        nodes.insert(
+            1,
+            ProcessNode {
+                pid: 1,
+                ppid: 0,
+                name: "init".into(),
+                cmdline: "".into(),
+                memory_mb: 0.0,
+                cpu_percent: 0.0,
+                is_target: false,
+                is_whitelisted: false,
+                is_orphan: false,
+                session_id: None,
+            },
+        );
+        nodes.insert(
+            100,
+            ProcessNode {
+                pid: 100,
+                ppid: 1,
+                name: "parent".into(),
+                cmdline: "".into(),
+                memory_mb: 0.0,
+                cpu_percent: 0.0,
+                is_target: false,
+                is_whitelisted: false,
+                is_orphan: true,
+                session_id: None,
+            },
+        );
+        nodes.insert(
+            200,
+            ProcessNode {
+                pid: 200,
+                ppid: 100,
+                name: "child".into(),
+                cmdline: "".into(),
+                memory_mb: 0.0,
+                cpu_percent: 0.0,
+                is_target: true,
+                is_whitelisted: false,
+                is_orphan: false,
+                session_id: None,
+            },
+        );
 
         assert!(is_ancestor(100, 200, &nodes));
         assert!(is_ancestor(1, 200, &nodes));
@@ -1034,16 +1061,36 @@ mod tests {
     fn test_is_ancestor_cycle_protection() {
         let mut nodes = HashMap::new();
         // Create a cycle: A -> B -> A
-        nodes.insert(10, ProcessNode {
-            pid: 10, ppid: 20, name: "a".into(), cmdline: "".into(),
-            memory_mb: 0.0, cpu_percent: 0.0, is_target: false,
-            is_whitelisted: false, is_orphan: false, session_id: None,
-        });
-        nodes.insert(20, ProcessNode {
-            pid: 20, ppid: 10, name: "b".into(), cmdline: "".into(),
-            memory_mb: 0.0, cpu_percent: 0.0, is_target: false,
-            is_whitelisted: false, is_orphan: false, session_id: None,
-        });
+        nodes.insert(
+            10,
+            ProcessNode {
+                pid: 10,
+                ppid: 20,
+                name: "a".into(),
+                cmdline: "".into(),
+                memory_mb: 0.0,
+                cpu_percent: 0.0,
+                is_target: false,
+                is_whitelisted: false,
+                is_orphan: false,
+                session_id: None,
+            },
+        );
+        nodes.insert(
+            20,
+            ProcessNode {
+                pid: 20,
+                ppid: 10,
+                name: "b".into(),
+                cmdline: "".into(),
+                memory_mb: 0.0,
+                cpu_percent: 0.0,
+                is_target: false,
+                is_whitelisted: false,
+                is_orphan: false,
+                session_id: None,
+            },
+        );
 
         // Should not infinite loop
         assert!(!is_ancestor(999, 10, &nodes));

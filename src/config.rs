@@ -109,16 +109,25 @@ impl Config {
 
         // Validate pattern counts
         if self.targets.len() > 100 {
-            anyhow::bail!("Too many target patterns (max 100, got {})", self.targets.len());
+            anyhow::bail!(
+                "Too many target patterns (max 100, got {})",
+                self.targets.len()
+            );
         }
         if self.whitelist.len() > 100 {
-            anyhow::bail!("Too many whitelist patterns (max 100, got {})", self.whitelist.len());
+            anyhow::bail!(
+                "Too many whitelist patterns (max 100, got {})",
+                self.whitelist.len()
+            );
         }
 
         // Validate pattern lengths and compile regexes
         for pattern in self.targets.iter().chain(self.whitelist.iter()) {
             if pattern.len() > 1024 {
-                anyhow::bail!("Pattern too long (max 1024 chars): {}...", &pattern[..50.min(pattern.len())]);
+                anyhow::bail!(
+                    "Pattern too long (max 1024 chars): {}...",
+                    &pattern[..50.min(pattern.len())]
+                );
             }
         }
 
@@ -126,8 +135,7 @@ impl Config {
             Regex::new(pattern).with_context(|| format!("Invalid target pattern: {pattern}"))?;
         }
         for pattern in &self.whitelist {
-            Regex::new(pattern)
-                .with_context(|| format!("Invalid whitelist pattern: {pattern}"))?;
+            Regex::new(pattern).with_context(|| format!("Invalid whitelist pattern: {pattern}"))?;
         }
         Ok(())
     }
@@ -304,7 +312,6 @@ impl Config {
 
         true
     }
-
 }
 
 /// Get the configuration file path (~/.config/proc-janitor/config.toml on all platforms)
@@ -341,7 +348,11 @@ const CONFIG_TEMPLATE: &str = include_str!("config_template.toml");
 /// Known dev tool categories for smart detection
 const DEV_CATEGORIES: &[(&str, &[&str], &[&str])] = &[
     // (category_name, process_name_patterns, suggested_target_regexes)
-    ("Node.js", &["node", "npm", "npx", "yarn", "pnpm"], &["node"]),
+    (
+        "Node.js",
+        &["node", "npm", "npx", "yarn", "pnpm"],
+        &["node"],
+    ),
     (
         "Claude Code",
         &["claude"],
@@ -379,9 +390,7 @@ fn get_preset(name: &str) -> Result<Preset> {
             targets: vec![],
             whitelist: vec![],
         }),
-        _ => anyhow::bail!(
-            "Unknown preset: '{name}'. Available: claude, dev, minimal"
-        ),
+        _ => anyhow::bail!("Unknown preset: '{name}'. Available: claude, dev, minimal"),
     }
 }
 
@@ -493,7 +502,11 @@ pub fn init(force: bool, preset: Option<String>, yes: bool) -> Result<()> {
         let p = get_preset(&preset_name)?;
         let content = render_template(&p.targets, &p.whitelist)?;
         write_config(&path, &content)?;
-        println!("Config created with '{}' preset: {}", preset_name, path.display());
+        println!(
+            "Config created with '{}' preset: {}",
+            preset_name,
+            path.display()
+        );
         println!("Edit with: proc-janitor config edit");
         return Ok(());
     }
@@ -605,7 +618,8 @@ pub fn edit() -> Result<()> {
         cmd.args(&parts[1..]);
     }
     cmd.arg(&path);
-    let _status = cmd.status()
+    let _status = cmd
+        .status()
         .with_context(|| format!("Failed to open editor for config: {}", path.display()))?;
 
     // Validate the edited config
@@ -639,17 +653,60 @@ pub fn show(json: bool) -> Result<()> {
 pub fn show_env() -> Result<()> {
     println!("Environment variable overrides for proc-janitor:");
     println!("================================================\n");
-    println!("These override values from the config file ({}).\n", config_path()?.display());
+    println!(
+        "These override values from the config file ({}).\n",
+        config_path()?.display()
+    );
 
     let env_vars = [
-        ("PROC_JANITOR_SCAN_INTERVAL", "Scan interval in seconds", "1-3600", "5"),
-        ("PROC_JANITOR_GRACE_PERIOD", "Grace period before killing (seconds)", "0-3600", "30"),
-        ("PROC_JANITOR_SIGTERM_TIMEOUT", "SIGTERM timeout before SIGKILL (seconds)", "1-60", "5"),
-        ("PROC_JANITOR_TARGETS", "Target patterns (comma-separated regexes)", "regex list", "node.*claude,claude,node.*mcp"),
-        ("PROC_JANITOR_WHITELIST", "Whitelist patterns (comma-separated regexes)", "regex list", "node.*server,pm2"),
-        ("PROC_JANITOR_LOG_ENABLED", "Enable file logging", "true/false", "true"),
-        ("PROC_JANITOR_LOG_PATH", "Log file directory path", "path", "~/.proc-janitor/logs"),
-        ("PROC_JANITOR_LOG_RETENTION_DAYS", "Log retention period in days", "0-365", "7"),
+        (
+            "PROC_JANITOR_SCAN_INTERVAL",
+            "Scan interval in seconds",
+            "1-3600",
+            "5",
+        ),
+        (
+            "PROC_JANITOR_GRACE_PERIOD",
+            "Grace period before killing (seconds)",
+            "0-3600",
+            "30",
+        ),
+        (
+            "PROC_JANITOR_SIGTERM_TIMEOUT",
+            "SIGTERM timeout before SIGKILL (seconds)",
+            "1-60",
+            "5",
+        ),
+        (
+            "PROC_JANITOR_TARGETS",
+            "Target patterns (comma-separated regexes)",
+            "regex list",
+            "node.*claude,claude,node.*mcp",
+        ),
+        (
+            "PROC_JANITOR_WHITELIST",
+            "Whitelist patterns (comma-separated regexes)",
+            "regex list",
+            "node.*server,pm2",
+        ),
+        (
+            "PROC_JANITOR_LOG_ENABLED",
+            "Enable file logging",
+            "true/false",
+            "true",
+        ),
+        (
+            "PROC_JANITOR_LOG_PATH",
+            "Log file directory path",
+            "path",
+            "~/.proc-janitor/logs",
+        ),
+        (
+            "PROC_JANITOR_LOG_RETENTION_DAYS",
+            "Log retention period in days",
+            "0-365",
+            "7",
+        ),
     ];
 
     for (name, desc, range, default) in &env_vars {

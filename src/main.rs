@@ -130,11 +130,8 @@ fn run() -> Result<()> {
                                 } else {
                                     println!(
                                         "  {}",
-                                        format!(
-                                            "Failed to clean PID {} ({})",
-                                            res.pid, res.name
-                                        )
-                                        .red()
+                                        format!("Failed to clean PID {} ({})", res.pid, res.name)
+                                            .red()
                                     );
                                 }
                             } else if let Some(ref err) = res.error_message {
@@ -253,9 +250,7 @@ fn main() {
             3
         } else if err_str_lower.contains("already running") {
             4
-        } else if err_str_lower.contains("not running")
-            || err_str_lower.contains("no such file")
-        {
+        } else if err_str_lower.contains("not running") || err_str_lower.contains("no such file") {
             5
         } else {
             1

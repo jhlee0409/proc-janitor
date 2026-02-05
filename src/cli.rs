@@ -3,7 +3,9 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(name = "proc-janitor")]
 #[command(about = "Automated orphan process cleanup daemon for macOS/Linux")]
-#[command(long_about = "proc-janitor detects and cleans up orphaned processes (PPID=1) matching\nconfigurable regex patterns. Use 'scan' for safe preview, 'clean' for\nimmediate action, or 'start' to run as a background daemon.\n\nQuick start:\n  proc-janitor scan              Preview orphaned processes (safe)\n  proc-janitor config init       Set up with auto-detection\n  proc-janitor start             Start background daemon\n  proc-janitor doctor            Check system health")]
+#[command(
+    long_about = "proc-janitor detects and cleans up orphaned processes (PPID=1) matching\nconfigurable regex patterns. Use 'scan' for safe preview, 'clean' for\nimmediate action, or 'start' to run as a background daemon.\n\nQuick start:\n  proc-janitor scan              Preview orphaned processes (safe)\n  proc-janitor config init       Set up with auto-detection\n  proc-janitor start             Start background daemon\n  proc-janitor doctor            Check system health"
+)]
 #[command(version)]
 pub struct Cli {
     /// Output in JSON format

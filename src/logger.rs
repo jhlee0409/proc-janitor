@@ -159,8 +159,8 @@ pub fn show_logs(follow: bool, lines: u64) -> Result<()> {
         .with_context(|| format!("Failed to open log file: {}", latest_log.display()))?;
     let reader = std::io::BufReader::new(&file);
 
-    use std::io::BufRead;
     use std::collections::VecDeque;
+    use std::io::BufRead;
 
     let max_lines = lines as usize;
     let mut last_lines: VecDeque<String> = VecDeque::with_capacity(max_lines + 1);
@@ -185,13 +185,20 @@ pub fn show_logs(follow: bool, lines: u64) -> Result<()> {
         use std::io::{Seek, SeekFrom};
 
         // Get current file size as our starting position
-        let mut file = fs::File::open(latest_log)
-            .with_context(|| format!("Failed to open log file for following: {}", latest_log.display()))?;
+        let mut file = fs::File::open(latest_log).with_context(|| {
+            format!(
+                "Failed to open log file for following: {}",
+                latest_log.display()
+            )
+        })?;
         file.seek(SeekFrom::End(0))?;
 
         let mut reader = std::io::BufReader::new(file);
 
-        println!("--- Following {} (Ctrl+C to stop) ---", latest_log.display());
+        println!(
+            "--- Following {} (Ctrl+C to stop) ---",
+            latest_log.display()
+        );
 
         loop {
             let mut line = String::new();

@@ -56,7 +56,15 @@ pub fn clean_process_with_sys(
     println!("Cleaning process {pid}...");
     match crate::kill::kill_process_with_sys(sys, pid, Some(start_time), sigterm_timeout) {
         Ok(signal) => {
-            println!("Process {} terminated ({})", pid, if signal == Signal::SIGKILL { "forced" } else { "graceful" });
+            println!(
+                "Process {} terminated ({})",
+                pid,
+                if signal == Signal::SIGKILL {
+                    "forced"
+                } else {
+                    "graceful"
+                }
+            );
             Ok(CleanResult {
                 pid,
                 name: String::new(),
@@ -105,7 +113,13 @@ pub fn clean_all(
     );
 
     for orphan in orphans {
-        match clean_process_with_sys(&mut sys, orphan.pid, orphan.start_time, sigterm_timeout, dry_run) {
+        match clean_process_with_sys(
+            &mut sys,
+            orphan.pid,
+            orphan.start_time,
+            sigterm_timeout,
+            dry_run,
+        ) {
             Ok(mut result) => {
                 result.name = orphan.name.clone();
                 results.push(result);
@@ -165,15 +179,13 @@ mod tests {
 
     #[test]
     fn test_clean_all_dry_run() {
-        let orphans = vec![
-            crate::scanner::OrphanProcess {
-                pid: 99999,
-                name: "test".to_string(),
-                cmdline: "test cmd".to_string(),
-                first_seen: std::time::Instant::now(),
-                start_time: 0,
-            },
-        ];
+        let orphans = vec![crate::scanner::OrphanProcess {
+            pid: 99999,
+            name: "test".to_string(),
+            cmdline: "test cmd".to_string(),
+            first_seen: std::time::Instant::now(),
+            start_time: 0,
+        }];
         let results = clean_all(&orphans, 5, true).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].success);

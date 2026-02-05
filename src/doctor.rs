@@ -62,26 +62,24 @@ fn check_config_file() -> bool {
 
 fn check_config_validation() -> bool {
     match config::Config::load() {
-        Ok(cfg) => {
-            match cfg.validate() {
-                Ok(_) => {
-                    let pattern_count = cfg.targets.len() + cfg.whitelist.len();
-                    pass(
-                        "Config validation",
-                        &format!("All {pattern_count} patterns valid"),
-                    );
-                    true
-                }
-                Err(e) => {
-                    fail(
-                        "Config validation",
-                        &format!("Invalid pattern: {e}"),
-                        Some("Fix regex patterns in config.toml"),
-                    );
-                    false
-                }
+        Ok(cfg) => match cfg.validate() {
+            Ok(_) => {
+                let pattern_count = cfg.targets.len() + cfg.whitelist.len();
+                pass(
+                    "Config validation",
+                    &format!("All {pattern_count} patterns valid"),
+                );
+                true
             }
-        }
+            Err(e) => {
+                fail(
+                    "Config validation",
+                    &format!("Invalid pattern: {e}"),
+                    Some("Fix regex patterns in config.toml"),
+                );
+                false
+            }
+        },
         Err(e) => {
             fail(
                 "Config validation",
@@ -106,17 +104,17 @@ fn check_targets_configured() -> bool {
             } else {
                 pass(
                     "Target patterns",
-                    &format!("{} pattern{} configured", config.targets.len(), if config.targets.len() == 1 { "" } else { "s" }),
+                    &format!(
+                        "{} pattern{} configured",
+                        config.targets.len(),
+                        if config.targets.len() == 1 { "" } else { "s" }
+                    ),
                 );
                 true
             }
         }
         Err(_) => {
-            fail(
-                "Target patterns",
-                "Cannot load config",
-                None,
-            );
+            fail("Target patterns", "Cannot load config", None);
             false
         }
     }
@@ -137,10 +135,7 @@ fn check_data_directory() -> bool {
 
     if !data_dir.exists() {
         if fs::create_dir_all(&data_dir).is_ok() {
-            pass(
-                "Data directory",
-                &format!("{} created", data_dir.display()),
-            );
+            pass("Data directory", &format!("{} created", data_dir.display()));
             return true;
         } else {
             fail(
@@ -178,7 +173,10 @@ fn check_data_directory() -> bool {
     } else {
         pass(
             "Data directory",
-            &format!("{} exists (write test skipped: symlink check failed)", data_dir.display()),
+            &format!(
+                "{} exists (write test skipped: symlink check failed)",
+                data_dir.display()
+            ),
         );
         true
     }
@@ -232,7 +230,10 @@ fn check_log_directory() -> bool {
     } else {
         pass(
             "Log directory",
-            &format!("{} exists (write test skipped: symlink check failed)", log_dir.display()),
+            &format!(
+                "{} exists (write test skipped: symlink check failed)",
+                log_dir.display()
+            ),
         );
         true
     }
@@ -315,7 +316,10 @@ fn check_session_store() -> bool {
             let sessions_file = match data_dir() {
                 Some(d) => d.join("sessions.json"),
                 None => {
-                    pass("Session store", "Not initialized (will be created on first use)");
+                    pass(
+                        "Session store",
+                        "Not initialized (will be created on first use)",
+                    );
                     return true;
                 }
             };
@@ -327,7 +331,10 @@ fn check_session_store() -> bool {
                 );
                 false
             } else {
-                pass("Session store", "Not initialized (will be created on first use)");
+                pass(
+                    "Session store",
+                    "Not initialized (will be created on first use)",
+                );
                 true
             }
         }
@@ -375,10 +382,7 @@ pub fn run() -> Result<()> {
             println!("{passed}/{total} checks passed");
         }
     } else if use_color() {
-        println!(
-            "{}",
-            format!("{passed}/{total} checks passed").yellow()
-        );
+        println!("{}", format!("{passed}/{total} checks passed").yellow());
     } else {
         println!("{passed}/{total} checks passed");
     }
@@ -426,7 +430,9 @@ mod tests {
         let source = include_str!("doctor.rs");
 
         // Extract only the run() function body (up to #[cfg(test)] or end)
-        let run_fn_start = source.find("pub fn run()").expect("run() function not found");
+        let run_fn_start = source
+            .find("pub fn run()")
+            .expect("run() function not found");
         let run_body = &source[run_fn_start..];
         let run_body = match run_body.find("#[cfg(test)]") {
             Some(pos) => &run_body[..pos],

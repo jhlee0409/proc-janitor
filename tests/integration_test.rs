@@ -73,10 +73,16 @@ fn test_scan_json_output() {
     if let (Some(start), Some(end)) = (json_start, json_end) {
         if end > start {
             let json_str = &json_output[start..=end];
-            let result: serde_json::Value = serde_json::from_str(json_str)
-                .expect("Failed to parse scan JSON output");
-            assert!(result.get("orphans").is_some(), "JSON should have 'orphans' field");
-            assert!(result.get("orphan_count").is_some(), "JSON should have 'orphan_count' field");
+            let result: serde_json::Value =
+                serde_json::from_str(json_str).expect("Failed to parse scan JSON output");
+            assert!(
+                result.get("orphans").is_some(),
+                "JSON should have 'orphans' field"
+            );
+            assert!(
+                result.get("orphan_count").is_some(),
+                "JSON should have 'orphan_count' field"
+            );
         }
     }
 }

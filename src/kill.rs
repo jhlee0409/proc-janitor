@@ -9,16 +9,20 @@ use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::thread;
 use std::time::Duration;
-use sysinfo::{ProcessesToUpdate, System};
 #[cfg(test)]
 use sysinfo::{ProcessRefreshKind, RefreshKind};
+use sysinfo::{ProcessesToUpdate, System};
 
 /// System-critical PIDs that must never be killed
 const SYSTEM_PIDS: [u32; 3] = [0, 1, 2];
 
 /// Verify process identity using an existing System instance (for batch operations).
 /// Falls back to creating a new instance if none provided.
-pub fn verify_process_identity_with_sys(sys: &mut System, pid: u32, expected_start_time: u64) -> bool {
+pub fn verify_process_identity_with_sys(
+    sys: &mut System,
+    pid: u32,
+    expected_start_time: u64,
+) -> bool {
     sys.refresh_processes(ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
     if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
         process.start_time() == expected_start_time
@@ -46,7 +50,12 @@ pub fn process_exists(pid: u32) -> bool {
 
 /// Kill a process using a shared System instance (for batch operations).
 /// Avoids creating a new System instance per kill during batch cleanup.
-pub fn kill_process_with_sys(sys: &mut System, pid: u32, start_time: Option<u64>, sigterm_timeout_secs: u64) -> Result<Signal> {
+pub fn kill_process_with_sys(
+    sys: &mut System,
+    pid: u32,
+    start_time: Option<u64>,
+    sigterm_timeout_secs: u64,
+) -> Result<Signal> {
     // Guard against killing system-critical processes
     if SYSTEM_PIDS.contains(&pid) {
         bail!("Refusing to kill system process (PID {pid})");
@@ -84,7 +93,8 @@ pub fn kill_process_with_sys(sys: &mut System, pid: u32, start_time: Option<u64>
         match kill(nix_pid, None) {
             Err(Errno::ESRCH) => break false,
             Err(e) => {
-                return Err(e).with_context(|| format!("Failed to check if PID {pid} is still alive"));
+                return Err(e)
+                    .with_context(|| format!("Failed to check if PID {pid} is still alive"));
             }
             Ok(()) => {
                 if elapsed >= deadline {
@@ -113,7 +123,11 @@ pub fn kill_process_with_sys(sys: &mut System, pid: u32, start_time: Option<u64>
 /// - Uses configurable SIGTERM timeout
 /// - Handles ESRCH for already-exited processes
 #[cfg(test)]
-pub fn kill_process(pid: u32, start_time: Option<u64>, sigterm_timeout_secs: u64) -> Result<Signal> {
+pub fn kill_process(
+    pid: u32,
+    start_time: Option<u64>,
+    sigterm_timeout_secs: u64,
+) -> Result<Signal> {
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
@@ -215,7 +229,7 @@ mod tests {
     #[test]
     fn test_kill_real_child_with_identity() {
         use std::process::Command;
-        use sysinfo::{ProcessRefreshKind, RefreshKind, System, ProcessesToUpdate};
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
         // Spawn a child process
         let mut child = Command::new("sleep")
@@ -230,7 +244,8 @@ mod tests {
             RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
         );
         sys.refresh_processes(ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
-        let start_time = sys.process(sysinfo::Pid::from_u32(pid))
+        let start_time = sys
+            .process(sysinfo::Pid::from_u32(pid))
             .map(|p| p.start_time())
             .unwrap_or(0);
 
@@ -252,7 +267,8 @@ mod tests {
             RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
         );
         sys.refresh_processes(ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
-        let our_start_time = sys.process(sysinfo::Pid::from_u32(pid))
+        let our_start_time = sys
+            .process(sysinfo::Pid::from_u32(pid))
             .map(|p| p.start_time())
             .expect("Should find our own process");
 

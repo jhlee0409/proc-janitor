@@ -140,14 +140,15 @@ impl SessionStore {
         file.read_to_string(&mut content)
             .with_context(|| format!("Failed to read sessions file: {}", path.display()))?;
 
-        fs2::FileExt::unlock(&file)
-            .with_context(|| "Failed to release lock on sessions file")?;
+        fs2::FileExt::unlock(&file).with_context(|| "Failed to release lock on sessions file")?;
 
         // Parse JSON with corruption recovery
         match serde_json::from_str::<SessionStore>(&content) {
             Ok(store) => Ok(store),
             Err(_) => {
-                eprintln!("Warning: Sessions file is corrupted, backing up and creating fresh store.");
+                eprintln!(
+                    "Warning: Sessions file is corrupted, backing up and creating fresh store."
+                );
 
                 // Create backup path
                 let backup_path = path.with_extension("json.corrupt");
@@ -155,8 +156,12 @@ impl SessionStore {
 
                 // Backup the corrupt file
                 crate::util::check_not_symlink(&backup_path)?;
-                fs::copy(&path, &backup_path)
-                    .with_context(|| format!("Failed to backup corrupt sessions file to: {}", backup_path.display()))?;
+                fs::copy(&path, &backup_path).with_context(|| {
+                    format!(
+                        "Failed to backup corrupt sessions file to: {}",
+                        backup_path.display()
+                    )
+                })?;
 
                 // Return fresh store so session subsystem continues working
                 Ok(Self::default())
@@ -311,7 +316,9 @@ pub fn track(session_id: &str, pid: u32) -> Result<()> {
         let mut sys = System::new_with_specifics(
             RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
         );
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(
+            pid,
+        )]));
         sys.process(sysinfo::Pid::from_u32(pid))
             .map(|p| p.start_time())
     };

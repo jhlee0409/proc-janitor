@@ -16,7 +16,8 @@ fn detect_container_environment() -> bool {
     }
     // Check for common container cgroup indicators
     if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup") {
-        if cgroup.contains("docker") || cgroup.contains("kubepods") || cgroup.contains("containerd") {
+        if cgroup.contains("docker") || cgroup.contains("kubepods") || cgroup.contains("containerd")
+        {
             return true;
         }
     }
@@ -76,8 +77,10 @@ impl Scanner {
             })?;
 
         if target_patterns.is_empty() {
-            tracing::warn!("No target patterns configured. Scanner will not detect any orphaned processes. \
-                            Run 'proc-janitor config init' to set up target patterns.");
+            tracing::warn!(
+                "No target patterns configured. Scanner will not detect any orphaned processes. \
+                            Run 'proc-janitor config init' to set up target patterns."
+            );
         }
 
         if detect_container_environment() {

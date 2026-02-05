@@ -1,9 +1,9 @@
 use anyhow::Result;
 use regex::Regex;
 use serde::Serialize;
-use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use std::collections::HashMap;
 use std::time::Instant;
+use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
 use crate::config::Config;
 
@@ -15,7 +15,7 @@ pub struct OrphanProcess {
     pub cmdline: String,
     #[serde(skip)]
     pub first_seen: Instant,
-    pub start_time: u64,  // Process start time for identity verification
+    pub start_time: u64, // Process start time for identity verification
 }
 
 /// Result of a scan operation
@@ -38,17 +38,21 @@ impl Scanner {
     /// Create a new Scanner with the given configuration
     pub fn new(config: Config) -> Result<Self> {
         // Pre-compile regex patterns
-        let target_patterns = config.targets
+        let target_patterns = config
+            .targets
             .iter()
             .map(|p| Regex::new(p))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("Invalid target regex pattern in configuration: {}", e))?;
 
-        let whitelist_patterns = config.whitelist
+        let whitelist_patterns = config
+            .whitelist
             .iter()
             .map(|p| Regex::new(p))
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("Invalid whitelist regex pattern in configuration: {}", e))?;
+            .map_err(|e| {
+                anyhow::anyhow!("Invalid whitelist regex pattern in configuration: {}", e)
+            })?;
 
         Ok(Self {
             config,
@@ -80,7 +84,8 @@ impl Scanner {
             }
 
             // Get command line - convert OsString to String
-            let cmdline = process.cmd()
+            let cmdline = process
+                .cmd()
                 .iter()
                 .map(|s| s.to_string_lossy().to_string())
                 .collect::<Vec<String>>()
@@ -100,13 +105,16 @@ impl Scanner {
             }
 
             // Track this orphan
-            let orphan = self.tracked.entry(pid_u32).or_insert_with(|| OrphanProcess {
-                pid: pid_u32,
-                name: process.name().to_string_lossy().to_string(),
-                cmdline: cmdline.clone(),
-                first_seen: now,
-                start_time: process.start_time(),  // Capture process start time for identity verification
-            });
+            let orphan = self
+                .tracked
+                .entry(pid_u32)
+                .or_insert_with(|| OrphanProcess {
+                    pid: pid_u32,
+                    name: process.name().to_string_lossy().to_string(),
+                    cmdline: cmdline.clone(),
+                    first_seen: now,
+                    start_time: process.start_time(), // Capture process start time for identity verification
+                });
 
             // Check if grace period has elapsed
             let elapsed = now.duration_since(orphan.first_seen);
@@ -128,7 +136,9 @@ impl Scanner {
 
     /// Check if the command line is whitelisted
     fn is_whitelisted(&self, cmdline: &str) -> bool {
-        self.whitelist_patterns.iter().any(|re| re.is_match(cmdline))
+        self.whitelist_patterns
+            .iter()
+            .any(|re| re.is_match(cmdline))
     }
 }
 
@@ -147,7 +157,11 @@ pub fn scan(execute: bool) -> Result<ScanResult> {
 
 /// Scan using an existing Scanner instance, preserving tracked state across calls.
 /// This is used by the daemon to maintain grace_period tracking between scan cycles.
-pub fn scan_with_scanner(scanner: &mut Scanner, execute: bool, sigterm_timeout: u64) -> Result<ScanResult> {
+pub fn scan_with_scanner(
+    scanner: &mut Scanner,
+    execute: bool,
+    sigterm_timeout: u64,
+) -> Result<ScanResult> {
     let orphans = scanner.scan()?;
 
     let total_scanned = orphans.len();

@@ -57,8 +57,7 @@ impl Default for Config {
 impl Config {
     /// Create a new default configuration with proper error handling
     pub fn new_default() -> Result<Self> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
+        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
         let log_path = home
             .join(".proc-janitor")
             .join("logs")
@@ -86,8 +85,7 @@ impl Config {
     /// Validate all regex patterns in the configuration
     pub fn validate(&self) -> Result<()> {
         for pattern in &self.targets {
-            Regex::new(pattern)
-                .with_context(|| format!("Invalid target pattern: {}", pattern))?;
+            Regex::new(pattern).with_context(|| format!("Invalid target pattern: {}", pattern))?;
         }
         for pattern in &self.whitelist {
             Regex::new(pattern)
@@ -132,7 +130,7 @@ impl Config {
         // Numeric settings with boundary validation
         if let Ok(val) = std::env::var("PROC_JANITOR_SCAN_INTERVAL") {
             if let Ok(v) = val.parse::<u64>() {
-                if v >= 1 && v <= 3600 {
+                if (1..=3600).contains(&v) {
                     self.scan_interval = v;
                 } else {
                     eprintln!("Warning: PROC_JANITOR_SCAN_INTERVAL out of range (1-3600): {}, using default", v);
@@ -152,7 +150,7 @@ impl Config {
 
         if let Ok(val) = std::env::var("PROC_JANITOR_SIGTERM_TIMEOUT") {
             if let Ok(v) = val.parse::<u64>() {
-                if v >= 1 && v <= 60 {
+                if (1..=60).contains(&v) {
                     self.sigterm_timeout = v;
                 } else {
                     eprintln!("Warning: PROC_JANITOR_SIGTERM_TIMEOUT out of range (1-60): {}, using default", v);
@@ -214,8 +212,7 @@ impl Config {
         // Reject paths to system directories (case-insensitive)
         let lower_path = path.to_lowercase();
         let dangerous_prefixes = [
-            "/etc/", "/usr/", "/bin/", "/sbin/", "/system/",
-            "/boot/", "/root/", "/var/", "/tmp/",
+            "/etc/", "/usr/", "/bin/", "/sbin/", "/system/", "/boot/", "/root/", "/var/", "/tmp/",
         ];
 
         for prefix in &dangerous_prefixes {
@@ -242,8 +239,7 @@ impl Config {
         ensure_config_dir()?;
 
         let path = config_path()?;
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize configuration")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
@@ -263,9 +259,7 @@ pub fn config_path() -> Result<PathBuf> {
 /// Ensure configuration directory exists
 pub fn ensure_config_dir() -> Result<()> {
     let path = config_path()?;
-    let dir = path
-        .parent()
-        .context("Failed to get config directory")?;
+    let dir = path.parent().context("Failed to get config directory")?;
 
     fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create config directory: {}", dir.display()))?;
@@ -298,7 +292,10 @@ pub fn edit() -> Result<()> {
 
     // Security: Validate editor to prevent command injection
     // Only allow safe characters: alphanumeric, hyphens, underscores, dots, and forward slashes
-    if !editor.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.') {
+    if !editor
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.')
+    {
         anyhow::bail!("Invalid EDITOR value: must contain only alphanumeric characters, hyphens, underscores, dots, or slashes");
     }
 

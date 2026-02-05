@@ -47,12 +47,17 @@ fn verify_process_identity(pid: u32, expected_start_time: u64) -> bool {
     if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
         process.start_time() == expected_start_time
     } else {
-        false  // Process no longer exists
+        false // Process no longer exists
     }
 }
 
 /// Clean a single process by PID
-pub fn clean_process(pid: u32, start_time: u64, sigterm_timeout: u64, dry_run: bool) -> Result<CleanResult> {
+pub fn clean_process(
+    pid: u32,
+    start_time: u64,
+    sigterm_timeout: u64,
+    dry_run: bool,
+) -> Result<CleanResult> {
     // Prevent killing system-critical processes
     if pid == 0 || pid == 1 || pid == 2 {
         return Err(anyhow::anyhow!(
@@ -69,7 +74,7 @@ pub fn clean_process(pid: u32, start_time: u64, sigterm_timeout: u64, dry_run: b
         ));
     }
     let pid_nix = Pid::from_raw(
-        i32::try_from(pid).with_context(|| format!("PID {} exceeds i32 range", pid))?
+        i32::try_from(pid).with_context(|| format!("PID {} exceeds i32 range", pid))?,
     );
 
     if dry_run {
@@ -137,7 +142,11 @@ pub fn clean_process(pid: u32, start_time: u64, sigterm_timeout: u64, dry_run: b
 }
 
 /// Clean all orphaned processes
-pub fn clean_all(orphans: &[OrphanProcess], sigterm_timeout: u64, dry_run: bool) -> Result<Vec<CleanResult>> {
+pub fn clean_all(
+    orphans: &[OrphanProcess],
+    sigterm_timeout: u64,
+    dry_run: bool,
+) -> Result<Vec<CleanResult>> {
     let mut results = Vec::new();
 
     for orphan in orphans {

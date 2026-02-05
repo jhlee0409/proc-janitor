@@ -60,8 +60,13 @@ impl std::str::FromStr for SessionSource {
         if s.len() > 50 {
             return Err(anyhow::anyhow!("Session source too long (max 50 chars)"));
         }
-        if !s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-            return Err(anyhow::anyhow!("Session source must be alphanumeric with - or _"));
+        if !s
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(anyhow::anyhow!(
+                "Session source must be alphanumeric with - or _"
+            ));
         }
 
         Ok(match s.to_lowercase().as_str() {
@@ -105,8 +110,8 @@ impl SessionStore {
         file.unlock()
             .with_context(|| "Failed to release lock on sessions file")?;
 
-        let store: SessionStore = serde_json::from_str(&content)
-            .with_context(|| "Failed to parse sessions file")?;
+        let store: SessionStore =
+            serde_json::from_str(&content).with_context(|| "Failed to parse sessions file")?;
 
         Ok(store)
     }
@@ -127,7 +132,12 @@ impl SessionStore {
             .create(true)
             .truncate(false)
             .open(&path)
-            .with_context(|| format!("Failed to open sessions file for locking: {}", path.display()))?;
+            .with_context(|| {
+                format!(
+                    "Failed to open sessions file for locking: {}",
+                    path.display()
+                )
+            })?;
 
         file.lock_exclusive()
             .with_context(|| "Failed to acquire exclusive lock on sessions file")?;
@@ -187,7 +197,8 @@ impl SessionStore {
             .filter(|(_, session)| {
                 if let Some(parent_pid) = session.parent_pid {
                     // Check if parent process still exists
-                    !sys.processes().contains_key(&sysinfo::Pid::from_u32(parent_pid))
+                    !sys.processes()
+                        .contains_key(&sysinfo::Pid::from_u32(parent_pid))
                 } else {
                     false
                 }
@@ -248,7 +259,10 @@ pub fn register(
         if custom_id.len() > 100 {
             anyhow::bail!("Session ID too long (max 100 characters)");
         }
-        if !custom_id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        if !custom_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
             anyhow::bail!("Session ID must be alphanumeric with hyphens or underscores only");
         }
     }
@@ -350,15 +364,14 @@ pub fn list() -> Result<()> {
     println!("Active sessions ({}):", sessions.len());
     println!("{:-<70}", "");
     for session in sessions {
-        println!(
-            "  {} [{}]",
-            session.id,
-            session.source
-        );
+        println!("  {} [{}]", session.id, session.source);
         if let Some(name) = &session.name {
             println!("    Name: {}", name);
         }
-        println!("    Created: {}", session.created_at.format("%Y-%m-%d %H:%M:%S"));
+        println!(
+            "    Created: {}",
+            session.created_at.format("%Y-%m-%d %H:%M:%S")
+        );
         println!("    Tracked PIDs: {:?}", session.pids);
         if let Some(tty) = &session.tty {
             println!("    TTY: {}", tty);
@@ -395,7 +408,8 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
         .iter()
         .filter(|(_, session)| {
             if let Some(parent_pid) = session.parent_pid {
-                !sys.processes().contains_key(&sysinfo::Pid::from_u32(parent_pid))
+                !sys.processes()
+                    .contains_key(&sysinfo::Pid::from_u32(parent_pid))
             } else {
                 false
             }

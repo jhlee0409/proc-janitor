@@ -46,11 +46,13 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
     }
 
     // Pre-compile regex patterns
-    let target_patterns: Vec<Regex> = config.targets
+    let target_patterns: Vec<Regex> = config
+        .targets
         .iter()
         .filter_map(|p| Regex::new(p).ok())
         .collect();
-    let whitelist_patterns: Vec<Regex> = config.whitelist
+    let whitelist_patterns: Vec<Regex> = config
+        .whitelist
         .iter()
         .filter_map(|p| Regex::new(p).ok())
         .collect();
@@ -191,7 +193,11 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
     Ok(())
 }
 
-fn has_target_descendant(pid: u32, children: &HashMap<u32, Vec<u32>>, nodes: &HashMap<u32, ProcessNode>) -> bool {
+fn has_target_descendant(
+    pid: u32,
+    children: &HashMap<u32, Vec<u32>>,
+    nodes: &HashMap<u32, ProcessNode>,
+) -> bool {
     if let Some(node) = nodes.get(&pid) {
         if node.is_target {
             return true;
@@ -238,7 +244,12 @@ fn print_subtree(
     }
 }
 
-fn print_node(node: &ProcessNode, prefix: &str, _standalone: bool, _nodes: &HashMap<u32, ProcessNode>) {
+fn print_node(
+    node: &ProcessNode,
+    prefix: &str,
+    _standalone: bool,
+    _nodes: &HashMap<u32, ProcessNode>,
+) {
     let _ = (_standalone, _nodes); // Silence unused parameter warnings
     let mut markers = String::new();
     if node.is_target && !node.is_whitelisted {
@@ -274,11 +285,7 @@ fn print_node(node: &ProcessNode, prefix: &str, _standalone: bool, _nodes: &Hash
 
     println!(
         "{}{} [{}] {} {}",
-        prefix,
-        name_colored,
-        node.pid,
-        mem_str,
-        markers
+        prefix, name_colored, node.pid, mem_str, markers
     );
 }
 
@@ -750,10 +757,10 @@ pub fn generate_dashboard() -> Result<PathBuf> {
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
-     .replace('\'', "&#39;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn is_ancestor(potential_ancestor: u32, target: u32, nodes: &HashMap<u32, ProcessNode>) -> bool {
@@ -778,14 +785,10 @@ pub fn open_dashboard() -> Result<()> {
     println!("Opening in browser...");
 
     #[cfg(target_os = "macos")]
-    std::process::Command::new("open")
-        .arg(&path)
-        .spawn()?;
+    std::process::Command::new("open").arg(&path).spawn()?;
 
     #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open")
-        .arg(&path)
-        .spawn()?;
+    std::process::Command::new("xdg-open").arg(&path).spawn()?;
 
     Ok(())
 }

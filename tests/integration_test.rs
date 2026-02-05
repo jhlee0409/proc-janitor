@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn binary_path() -> PathBuf {
     let mut path = std::env::current_exe().unwrap();
@@ -72,8 +72,8 @@ fn test_scan_json_output() {
         let json_part = &json_output[start..];
         if let Some(end) = json_part.find('}') {
             let json_str = &json_part[..=end];
-            let _: serde_json::Value = serde_json::from_str(json_str)
-                .expect("Output should be valid JSON");
+            let _: serde_json::Value =
+                serde_json::from_str(json_str).expect("Output should be valid JSON");
         }
     }
 }
@@ -88,7 +88,11 @@ fn test_status_command() {
     // Status can fail if daemon not running, but should not crash
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stdout.contains("not running") || stdout.contains("running") || stderr.contains("not running"));
+    assert!(
+        stdout.contains("not running")
+            || stdout.contains("running")
+            || stderr.contains("not running")
+    );
 }
 
 #[test]

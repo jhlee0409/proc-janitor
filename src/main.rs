@@ -1,5 +1,5 @@
-mod cli;
 mod cleaner;
+mod cli;
 mod config;
 mod daemon;
 mod logger;
@@ -90,17 +90,15 @@ fn main() -> Result<()> {
             visualize::open_dashboard()?;
         }
 
-        Commands::Config(config_cmd) => {
-            match config_cmd {
-                ConfigCommands::Edit => {
-                    println!("Opening configuration editor...");
-                    config::edit()?;
-                }
-                ConfigCommands::Show => {
-                    config::show(cli.json)?;
-                }
+        Commands::Config(config_cmd) => match config_cmd {
+            ConfigCommands::Edit => {
+                println!("Opening configuration editor...");
+                config::edit()?;
             }
-        }
+            ConfigCommands::Show => {
+                config::show(cli.json)?;
+            }
+        },
 
         Commands::Logs { follow, lines } => {
             logger::show_logs(follow, lines)?;
@@ -118,7 +116,10 @@ fn main() -> Result<()> {
             SessionCommands::Track { session_id, pid } => {
                 session::track(&session_id, pid)?;
             }
-            SessionCommands::Clean { session_id, dry_run } => {
+            SessionCommands::Clean {
+                session_id,
+                dry_run,
+            } => {
                 session::clean_session(&session_id, dry_run)?;
             }
             SessionCommands::List => {

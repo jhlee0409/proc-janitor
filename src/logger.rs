@@ -45,16 +45,11 @@ fn init_logger_with_config(config: &LoggingConfig) -> Result<()> {
         .with_level(true)
         .with_ansi(false);
 
-    let stdout_layer = fmt::layer()
-        .with_target(true)
-        .with_level(true);
+    let stdout_layer = fmt::layer().with_target(true).with_level(true);
 
     // Initialize subscriber with both layers
     tracing_subscriber::registry()
-        .with(
-            EnvFilter::from_default_env()
-                .add_directive(Level::INFO.into())
-        )
+        .with(EnvFilter::from_default_env().add_directive(Level::INFO.into()))
         .with(file_layer)
         .with(stdout_layer)
         .init();
@@ -204,8 +199,12 @@ mod tests {
         writeln!(f, "old log")?;
 
         // Set file time to 10 days ago
-        let ten_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 60 * 60);
-        filetime::set_file_mtime(&old_file, filetime::FileTime::from_system_time(ten_days_ago))?;
+        let ten_days_ago =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 60 * 60);
+        filetime::set_file_mtime(
+            &old_file,
+            filetime::FileTime::from_system_time(ten_days_ago),
+        )?;
 
         // Create a recent log file
         let recent_file = log_path.join("recent.log");

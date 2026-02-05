@@ -1,15 +1,15 @@
 use crate::config::Config;
-use crate::scanner::{self, Scanner};
 use crate::logger;
-use anyhow::{Result, Context, bail};
-use std::sync::{Arc, Condvar, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use std::path::PathBuf;
-use std::fs;
+use crate::scanner::{self, Scanner};
+use anyhow::{bail, Context, Result};
 use daemonize::Daemonize;
 use fs2::FileExt;
 use serde::Serialize;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 #[derive(Serialize)]
 pub struct DaemonStatus {
@@ -39,7 +39,9 @@ impl Daemon {
     fn sleep_interruptible(&self, duration: Duration) {
         let (lock, cvar) = &*self.condvar;
         let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = cvar.wait_timeout(guard, duration).unwrap_or_else(|e| e.into_inner());
+        let _ = cvar
+            .wait_timeout(guard, duration)
+            .unwrap_or_else(|e| e.into_inner());
     }
 
     /// Signal the daemon to wake up
@@ -83,7 +85,10 @@ impl Daemon {
         .context("Failed to set signal handler")?;
 
         let sigterm_timeout = self.config.sigterm_timeout;
-        println!("Daemon started. Scanning every {} seconds...", self.config.scan_interval);
+        println!(
+            "Daemon started. Scanning every {} seconds...",
+            self.config.scan_interval
+        );
 
         // Main loop - reuses self.scanner to preserve tracked state across cycles
         while self.running.load(Ordering::SeqCst) {
@@ -108,13 +113,11 @@ impl Daemon {
 
 /// Get the PID file path
 fn get_pid_file_path() -> Result<PathBuf> {
-    let home = std::env::var("HOME")
-        .context("HOME environment variable not set")?;
+    let home = std::env::var("HOME").context("HOME environment variable not set")?;
     let pid_dir = PathBuf::from(home).join(".proc-janitor");
 
     // Create directory if it doesn't exist
-    fs::create_dir_all(&pid_dir)
-        .context("Failed to create PID directory")?;
+    fs::create_dir_all(&pid_dir).context("Failed to create PID directory")?;
 
     Ok(pid_dir.join("proc-janitor.pid"))
 }
@@ -122,8 +125,7 @@ fn get_pid_file_path() -> Result<PathBuf> {
 /// Write PID to file
 fn write_pid_file(pid: u32) -> Result<()> {
     let pid_file = get_pid_file_path()?;
-    fs::write(&pid_file, pid.to_string())
-        .context("Failed to write PID file")?;
+    fs::write(&pid_file, pid.to_string()).context("Failed to write PID file")?;
     Ok(())
 }
 
@@ -131,8 +133,7 @@ fn write_pid_file(pid: u32) -> Result<()> {
 fn remove_pid_file() -> Result<()> {
     let pid_file = get_pid_file_path()?;
     if pid_file.exists() {
-        fs::remove_file(&pid_file)
-            .context("Failed to remove PID file")?;
+        fs::remove_file(&pid_file).context("Failed to remove PID file")?;
     }
     Ok(())
 }
@@ -164,29 +165,24 @@ pub fn is_daemon_running() -> bool {
 
 /// Daemonize the process
 pub fn daemonize() -> Result<()> {
-    let home = std::env::var("HOME")
-        .context("HOME environment variable not set")?;
+    let home = std::env::var("HOME").context("HOME environment variable not set")?;
     let daemon_dir = PathBuf::from(home).join(".proc-janitor");
 
     // Create directory if it doesn't exist
-    fs::create_dir_all(&daemon_dir)
-        .context("Failed to create daemon directory")?;
+    fs::create_dir_all(&daemon_dir).context("Failed to create daemon directory")?;
 
     let stdout_file = daemon_dir.join("daemon.out");
     let stderr_file = daemon_dir.join("daemon.err");
 
-    let stdout = fs::File::create(&stdout_file)
-        .context("Failed to create stdout file")?;
-    let stderr = fs::File::create(&stderr_file)
-        .context("Failed to create stderr file")?;
+    let stdout = fs::File::create(&stdout_file).context("Failed to create stdout file")?;
+    let stderr = fs::File::create(&stderr_file).context("Failed to create stderr file")?;
 
     let daemonize = Daemonize::new()
         .working_directory(&daemon_dir)
         .stdout(stdout)
         .stderr(stderr);
 
-    daemonize.start()
-        .context("Failed to daemonize process")?;
+    daemonize.start().context("Failed to daemonize process")?;
 
     Ok(())
 }
@@ -216,9 +212,7 @@ pub fn start(foreground: bool) -> Result<()> {
         use nix::sys::signal::kill;
         use nix::unistd::Pid;
 
-        let nix_pid = Pid::from_raw(
-            i32::try_from(old_pid).context("PID exceeds i32 range")?
-        );
+        let nix_pid = Pid::from_raw(i32::try_from(old_pid).context("PID exceeds i32 range")?);
         if kill(nix_pid, None).is_ok() {
             // Process exists and we have the lock - this shouldn't happen
             // but if it does, the other process doesn't hold the lock
@@ -278,9 +272,7 @@ pub fn stop() -> Result<()> {
         use nix::sys::signal::{kill, Signal};
         use nix::unistd::Pid as NixPid;
 
-        let nix_pid = NixPid::from_raw(
-            i32::try_from(pid).context("PID exceeds i32 range")?
-        );
+        let nix_pid = NixPid::from_raw(i32::try_from(pid).context("PID exceeds i32 range")?);
         kill(nix_pid, Signal::SIGTERM)
             .with_context(|| format!("Failed to send SIGTERM to daemon (PID: {})", pid))?;
 
@@ -301,7 +293,10 @@ pub fn stop() -> Result<()> {
         if terminated {
             println!("Daemon stopped successfully (PID: {})", pid);
         } else {
-            println!("Warning: Daemon (PID: {}) did not terminate within 5 seconds", pid);
+            println!(
+                "Warning: Daemon (PID: {}) did not terminate within 5 seconds",
+                pid
+            );
         }
 
         remove_pid_file()?;
@@ -325,20 +320,18 @@ pub fn status(json: bool) -> Result<()> {
             stale_pid_file,
         };
         println!("{}", serde_json::to_string_pretty(&status)?);
-    } else {
-        if running {
-            if let Some(pid) = pid {
-                println!("Daemon is running (PID: {})", pid);
-            } else {
-                println!("Daemon is running (PID unknown)");
-            }
+    } else if running {
+        if let Some(pid) = pid {
+            println!("Daemon is running (PID: {})", pid);
         } else {
-            println!("Daemon is not running");
+            println!("Daemon is running (PID unknown)");
+        }
+    } else {
+        println!("Daemon is not running");
 
-            // Check for stale PID file
-            if stale_pid_file {
-                println!("(Stale PID file found, daemon might have crashed)");
-            }
+        // Check for stale PID file
+        if stale_pid_file {
+            println!("(Stale PID file found, daemon might have crashed)");
         }
     }
     Ok(())

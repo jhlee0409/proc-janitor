@@ -34,6 +34,12 @@ Every 5 seconds (configurable):
 
 ## Installation
 
+### From crates.io (Recommended)
+
+```bash
+cargo install proc-janitor
+```
+
 ### Build from Source
 
 ```bash
@@ -54,9 +60,11 @@ cd proc-janitor && bash scripts/install.sh
 
 This builds the binary, installs it, creates a default config, and sets up a macOS LaunchAgent for auto-start on login.
 
-### Cargo Install
+### Cargo Install (from source)
 
 ```bash
+git clone https://github.com/jhlee0409/proc-janitor.git
+cd proc-janitor
 cargo install --path .
 ```
 

@@ -75,10 +75,16 @@ proc-janitor status
 # Stop the daemon
 proc-janitor stop
 
+# Diagnose issues
+proc-janitor doctor
+
+# Generate shell completions (add to your .zshrc/.bashrc)
+proc-janitor completions zsh > ~/.zfunc/_proc-janitor
+
 # Get JSON output
-proc-janitor --json status
-proc-janitor --json config show
-proc-janitor --json scan
+proc-janitor -j status
+proc-janitor -j config show
+proc-janitor -j scan
 ```
 
 ## Configuration
@@ -137,30 +143,33 @@ Every config option can be overridden via environment variables. Values outside 
 
 ### Global Options
 
-| Option | Description |
-|--------|-------------|
-| `--json` | Output results in JSON format (supported by: `status`, `config show`, `scan`, `clean`) |
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--json` | `-j` | Output results in JSON format (supported by: `status`, `config show`, `scan`, `clean`) |
 
 ### Core Commands
 
 | Command | Description |
 |---------|-------------|
-| `start [--foreground]` | Start the daemon |
+| `start [-f\|--foreground]` | Start the daemon |
 | `stop` | Stop the daemon |
-| `status` | Show daemon status |
-| `scan [--execute]` | Scan for orphans (dry-run by default) |
-| `clean [--dry-run]` | Kill orphaned target processes |
-| `tree [--targets-only]` | Visualize process tree |
-| `dashboard [--live] [--interval N]` | Open browser-based dashboard (live mode auto-refreshes every N seconds, default 5) |
-| `logs [-n N] [--follow]` | View logs |
+| `status` | Show daemon status (systemctl-style with uptime) |
+| `scan [-e\|--execute]` | Scan for orphans (dry-run by default) |
+| `clean [-d\|--dry-run]` | Kill orphaned target processes |
+| `tree [-t\|--targets-only]` | Visualize process tree |
+| `dashboard [-l\|--live] [--interval N]` | Open browser-based dashboard (live mode auto-refreshes every N seconds, default 5) |
+| `logs [-f\|--follow] [-n N]` | View logs |
+| `doctor` | Diagnose common issues and check system health |
+| `completions <shell>` | Generate shell completions (`bash`, `zsh`, `fish`, `powershell`) |
 
 ### Config Commands
 
 | Command | Description |
 |---------|-------------|
-| `config init [--force] [--preset NAME]` | Create config (auto-detects orphans, or use preset: `claude`, `dev`, `minimal`) |
+| `config init [--force] [--preset NAME] [-y\|--yes]` | Create config (auto-detects orphans, or use preset: `claude`, `dev`, `minimal`). Use `--yes` to skip prompts. `--list-presets` to see available presets. |
 | `config show` | Display current config |
-| `config edit` | Edit config in `$EDITOR` |
+| `config edit` | Edit config in `$EDITOR` (validates after save) |
+| `config env` | Show all environment variable overrides with current values |
 
 ### Session Commands
 
@@ -210,8 +219,9 @@ proc-janitor/
 │   ├── daemon.rs      # Daemon lifecycle (start/stop/status)
 │   ├── scanner.rs     # Orphan process detection
 │   ├── cleaner.rs     # Process termination (SIGTERM/SIGKILL)
-│   ├── kill.rs        # Shared kill logic (system PID guard, PID reuse check)
-│   ├── config.rs      # TOML config + env var overrides
+│   ├── kill.rs        # Shared kill logic (system PID guard, PID reuse check, polling)
+│   ├── doctor.rs      # Health checks and diagnostics
+│   ├── config.rs      # TOML config + env var overrides + presets
 │   ├── config_template.toml  # Commented config template (embedded at compile time)
 │   ├── logger.rs      # Structured logging with rotation
 │   ├── session.rs     # Session-based process tracking

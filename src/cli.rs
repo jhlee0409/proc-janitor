@@ -82,6 +82,13 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommands {
+    /// Create a commented configuration template
+    Init {
+        /// Overwrite existing config file
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Edit configuration file
     Edit,
 

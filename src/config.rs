@@ -240,18 +240,6 @@ impl Config {
         true
     }
 
-    /// Save configuration to ~/.config/proc-janitor/config.toml
-    pub fn save(&self) -> Result<()> {
-        ensure_config_dir()?;
-
-        let path = config_path()?;
-        let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
-
-        fs::write(&path, content)
-            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
-
-        Ok(())
-    }
 }
 
 /// Get the configuration file path (~/.config/proc-janitor/config.toml on all platforms)
@@ -282,16 +270,56 @@ pub fn ensure_config_dir() -> Result<()> {
     Ok(())
 }
 
+/// Commented config template (embedded at compile time)
+const CONFIG_TEMPLATE: &str = include_str!("config_template.toml");
+
+/// Generate the config template with the actual log path filled in
+fn render_template() -> Result<String> {
+    let log_path = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?
+        .join(".proc-janitor")
+        .join("logs")
+        .to_string_lossy()
+        .to_string();
+    Ok(CONFIG_TEMPLATE.replace("{log_path}", &log_path))
+}
+
+/// Create a commented configuration template file
+pub fn init(force: bool) -> Result<()> {
+    ensure_config_dir()?;
+    let path = config_path()?;
+
+    if path.exists() && !force {
+        println!("Config file already exists: {}", path.display());
+        println!("Use --force to overwrite.");
+        return Ok(());
+    }
+
+    let content = render_template()?;
+    fs::write(&path, &content)
+        .with_context(|| format!("Failed to write config file: {}", path.display()))?;
+
+    // Validate the generated config
+    let config: Config = toml::from_str(&content).context("Generated template is invalid")?;
+    config.validate()?;
+
+    println!("Config file created: {}", path.display());
+    println!("Edit with: proc-janitor config edit");
+
+    Ok(())
+}
+
 /// Open configuration file in editor
 pub fn edit() -> Result<()> {
     ensure_config_dir()?;
 
     let path = config_path()?;
 
-    // Create default config if it doesn't exist
+    // Create commented template if config doesn't exist
     if !path.exists() {
-        let config = Config::new_default()?;
-        config.save()?;
+        let content = render_template()?;
+        fs::write(&path, content)
+            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
     }
 
     // Get editor from environment or use default

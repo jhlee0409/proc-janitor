@@ -71,6 +71,9 @@ cargo install --path .
 ## Quick Start
 
 ```bash
+# Create a config file with explanations
+proc-janitor config init
+
 # See what's lurking
 proc-janitor scan
 
@@ -169,6 +172,7 @@ Every config option can be overridden via environment variables. Values outside 
 
 | Command | Description |
 |---------|-------------|
+| `config init [--force]` | Create a commented config template (`--force` to overwrite) |
 | `config show` | Display current config |
 | `config edit` | Edit config in `$EDITOR` |
 

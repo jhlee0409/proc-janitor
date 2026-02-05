@@ -92,8 +92,8 @@ fn main() -> Result<()> {
         }
 
         Commands::Config(config_cmd) => match config_cmd {
-            ConfigCommands::Init { force } => {
-                config::init(force)?;
+            ConfigCommands::Init { force, preset } => {
+                config::init(force, preset)?;
             }
             ConfigCommands::Edit => {
                 println!("Opening configuration editor...");

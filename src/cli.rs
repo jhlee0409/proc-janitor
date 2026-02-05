@@ -82,11 +82,15 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommands {
-    /// Create a commented configuration template
+    /// Create a configuration file (auto-detects orphaned processes)
     Init {
         /// Overwrite existing config file
         #[arg(long)]
         force: bool,
+
+        /// Use a preset: claude, dev, minimal
+        #[arg(long)]
+        preset: Option<String>,
     },
 
     /// Edit configuration file

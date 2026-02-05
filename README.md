@@ -172,7 +172,7 @@ Every config option can be overridden via environment variables. Values outside 
 
 | Command | Description |
 |---------|-------------|
-| `config init [--force]` | Create a commented config template (`--force` to overwrite) |
+| `config init [--force] [--preset NAME]` | Create config (auto-detects orphans, or use preset: `claude`, `dev`, `minimal`) |
 | `config show` | Display current config |
 | `config edit` | Edit config in `$EDITOR` |
 

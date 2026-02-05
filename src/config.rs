@@ -273,19 +273,150 @@ pub fn ensure_config_dir() -> Result<()> {
 /// Commented config template (embedded at compile time)
 const CONFIG_TEMPLATE: &str = include_str!("config_template.toml");
 
-/// Generate the config template with the actual log path filled in
-fn render_template() -> Result<String> {
+/// Known dev tool categories for smart detection
+const DEV_CATEGORIES: &[(&str, &[&str], &[&str])] = &[
+    // (category_name, process_name_patterns, suggested_target_regexes)
+    ("Node.js", &["node", "npm", "npx", "yarn", "pnpm"], &["node"]),
+    (
+        "Claude Code",
+        &["claude"],
+        &["node.*claude", "claude", "node.*mcp"],
+    ),
+    ("Rust/Cargo", &["cargo", "rustc", "rustup"], &["cargo"]),
+    ("Python", &["python", "python3", "pip", "pip3"], &["python"]),
+    (
+        "Bundlers",
+        &["webpack", "vite", "esbuild", "turbopack"],
+        &["webpack|vite|esbuild"],
+    ),
+    ("Java/JVM", &["java", "gradle", "mvn"], &["java|gradle"]),
+    ("Go", &["go"], &["go"]),
+    ("Ruby", &["ruby", "bundle", "rails"], &["ruby"]),
+];
+
+/// Preset configurations
+struct Preset {
+    targets: Vec<&'static str>,
+    whitelist: Vec<&'static str>,
+}
+
+fn get_preset(name: &str) -> Result<Preset> {
+    match name {
+        "claude" => Ok(Preset {
+            targets: vec!["node.*claude", "claude", "node.*mcp"],
+            whitelist: vec!["node.*server", "pm2"],
+        }),
+        "dev" => Ok(Preset {
+            targets: vec!["node", "cargo", "python", "webpack|vite|esbuild"],
+            whitelist: vec!["node.*server", "pm2", "node.*next"],
+        }),
+        "minimal" => Ok(Preset {
+            targets: vec![],
+            whitelist: vec![],
+        }),
+        _ => anyhow::bail!(
+            "Unknown preset: '{}'. Available: claude, dev, minimal",
+            name
+        ),
+    }
+}
+
+/// Format a TOML array from string slices
+fn format_toml_array(items: &[&str]) -> String {
+    if items.is_empty() {
+        return "targets = []".to_string();
+    }
+    let entries: Vec<String> = items.iter().map(|s| format!("    \"{}\",", s)).collect();
+    format!("targets = [\n{}\n]", entries.join("\n"))
+}
+
+fn format_toml_whitelist(items: &[&str]) -> String {
+    if items.is_empty() {
+        return "whitelist = []".to_string();
+    }
+    let entries: Vec<String> = items.iter().map(|s| format!("    \"{}\",", s)).collect();
+    format!("whitelist = [\n{}\n]", entries.join("\n"))
+}
+
+/// Render config template with targets, whitelist, and log path
+fn render_template(targets: &[&str], whitelist: &[&str]) -> Result<String> {
     let log_path = dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?
         .join(".proc-janitor")
         .join("logs")
         .to_string_lossy()
         .to_string();
-    Ok(CONFIG_TEMPLATE.replace("{log_path}", &log_path))
+    Ok(CONFIG_TEMPLATE
+        .replace("{targets}", &format_toml_array(targets))
+        .replace("{whitelist}", &format_toml_whitelist(whitelist))
+        .replace("{log_path}", &log_path))
 }
 
-/// Create a commented configuration template file
-pub fn init(force: bool) -> Result<()> {
+/// Detect orphaned dev processes on the system
+fn detect_orphan_categories() -> Vec<(String, Vec<String>, usize)> {
+    use sysinfo::{ProcessRefreshKind, RefreshKind, System};
+
+    let mut sys =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+
+    let mut results = Vec::new();
+
+    for &(category, name_patterns, suggested) in DEV_CATEGORIES {
+        let mut matched_cmds = Vec::new();
+        for (_pid, process) in sys.processes() {
+            // Only orphans (PPID=1)
+            let is_orphan = process.parent().map(|p| p.as_u32()) == Some(1);
+            if !is_orphan {
+                continue;
+            }
+
+            let pname = process.name().to_string_lossy().to_lowercase();
+            if name_patterns.iter().any(|pat| pname.contains(pat)) {
+                let cmdline = process
+                    .cmd()
+                    .iter()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !cmdline.is_empty() {
+                    let display = if cmdline.len() > 60 {
+                        format!("{}...", &cmdline[..57])
+                    } else {
+                        cmdline
+                    };
+                    matched_cmds.push(display);
+                }
+            }
+        }
+
+        let count = matched_cmds.len();
+        if count > 0 {
+            results.push((
+                category.to_string(),
+                suggested.iter().map(|s| s.to_string()).collect(),
+                count,
+            ));
+        }
+    }
+
+    results
+}
+
+/// Write config file and validate
+fn write_config(path: &std::path::Path, content: &str) -> Result<()> {
+    fs::write(path, content)
+        .with_context(|| format!("Failed to write config file: {}", path.display()))?;
+
+    // Validate
+    let config: Config = toml::from_str(content).context("Generated config is invalid")?;
+    config.validate()?;
+
+    Ok(())
+}
+
+/// Create config file with smart detection or preset
+pub fn init(force: bool, preset: Option<String>) -> Result<()> {
     ensure_config_dir()?;
     let path = config_path()?;
 
@@ -295,15 +426,74 @@ pub fn init(force: bool) -> Result<()> {
         return Ok(());
     }
 
-    let content = render_template()?;
-    fs::write(&path, &content)
-        .with_context(|| format!("Failed to write config file: {}", path.display()))?;
+    if let Some(preset_name) = preset {
+        // Preset mode
+        let p = get_preset(&preset_name)?;
+        let content = render_template(&p.targets, &p.whitelist)?;
+        write_config(&path, &content)?;
+        println!("Config created with '{}' preset: {}", preset_name, path.display());
+        println!("Edit with: proc-janitor config edit");
+        return Ok(());
+    }
 
-    // Validate the generated config
-    let config: Config = toml::from_str(&content).context("Generated template is invalid")?;
-    config.validate()?;
+    // Smart detection mode
+    println!("Scanning for orphaned processes...\n");
+    let detected = detect_orphan_categories();
 
-    println!("Config file created: {}", path.display());
+    if detected.is_empty() {
+        println!("No orphaned dev processes detected.");
+        println!("Creating config with empty targets (add patterns manually).\n");
+        let content = render_template(&[], &[])?;
+        write_config(&path, &content)?;
+        println!("Config file created: {}", path.display());
+        println!("Edit with: proc-janitor config edit");
+        println!("\nTip: Use a preset for quick setup:");
+        println!("  proc-janitor config init --force --preset claude");
+        println!("  proc-janitor config init --force --preset dev");
+        return Ok(());
+    }
+
+    // Show detected orphans
+    println!("Detected orphaned processes:");
+    let mut all_targets: Vec<&str> = Vec::new();
+    for (category, patterns, count) in &detected {
+        println!(
+            "  {} {} {} orphan(s)",
+            if *count > 0 { "\x1b[32m✓\x1b[0m" } else { " " },
+            category,
+            count
+        );
+        for p in patterns {
+            all_targets.push(p);
+        }
+    }
+
+    println!("\nSuggested target patterns:");
+    for t in &all_targets {
+        println!("  - \"{}\"", t);
+    }
+
+    // Ask for confirmation
+    println!("\nApply these targets? [Y/n] ");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let input = input.trim().to_lowercase();
+
+    if input == "n" || input == "no" {
+        println!("Creating config with empty targets instead.");
+        let content = render_template(&[], &[])?;
+        write_config(&path, &content)?;
+    } else {
+        let whitelist: Vec<&str> = if all_targets.iter().any(|t| t.contains("node")) {
+            vec!["node.*server", "pm2"]
+        } else {
+            vec![]
+        };
+        let content = render_template(&all_targets, &whitelist)?;
+        write_config(&path, &content)?;
+    }
+
+    println!("\nConfig file created: {}", path.display());
     println!("Edit with: proc-janitor config edit");
 
     Ok(())
@@ -317,7 +507,9 @@ pub fn edit() -> Result<()> {
 
     // Create commented template if config doesn't exist
     if !path.exists() {
-        let content = render_template()?;
+        let default_targets = &["node.*claude", "claude", "node.*mcp"];
+        let default_whitelist = &["node.*server", "pm2"];
+        let content = render_template(default_targets, default_whitelist)?;
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
     }

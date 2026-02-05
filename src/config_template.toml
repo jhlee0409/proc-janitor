@@ -2,7 +2,6 @@
 # Location: ~/.config/proc-janitor/config.toml
 # Documentation: https://github.com/jhlee0409/proc-janitor
 #
-# All values shown below are defaults. Uncomment and modify as needed.
 # Environment variables (PROC_JANITOR_*) override these settings.
 
 # ─── Scan Settings ───────────────────────────────────────────────────────────
@@ -22,16 +21,12 @@ sigterm_timeout = 5
 # Only orphaned processes (PPID=1) matching these patterns will be cleaned.
 #
 # Examples:
-#   "node"            - any process with "node" in its command line
-#   "node.*claude"    - Node.js processes related to Claude Code
-#   "^/usr/bin/python" - Python processes started from /usr/bin
-#   "webpack|vite"    - webpack or vite dev servers
+#   "node"             - any process with "node" in its command line
+#   "node.*claude"     - Node.js processes related to Claude Code
+#   "^/usr/bin/python"  - Python processes started from /usr/bin
+#   "webpack|vite"     - webpack or vite dev servers
 
-targets = [
-    "node.*claude",    # Claude Code processes
-    "claude",          # Claude CLI
-    "node.*mcp",       # MCP servers
-]
+{targets}
 
 # ─── Whitelist Patterns ─────────────────────────────────────────────────────
 # Regex patterns for processes that should NEVER be killed, even if they
@@ -42,10 +37,7 @@ targets = [
 #   "pm2"             - protect process managers
 #   "node.*next"      - protect Next.js dev server
 
-whitelist = [
-    "node.*server",    # Web servers
-    "pm2",             # Process managers
-]
+{whitelist}
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 

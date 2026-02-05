@@ -2,6 +2,7 @@ mod cleaner;
 mod cli;
 mod config;
 mod daemon;
+mod kill;
 mod logger;
 mod scanner;
 mod session;
@@ -37,7 +38,7 @@ fn main() -> Result<()> {
             } else if result.orphans.is_empty() {
                 println!("No orphaned processes found.");
             } else {
-                println!("Found {} orphaned process(es):", result.total_scanned);
+                println!("Found {} orphaned process(es):", result.orphan_count);
                 for orphan in &result.orphans {
                     println!(
                         "  PID {} - {}\n    Command: {}",
@@ -46,7 +47,7 @@ fn main() -> Result<()> {
                 }
 
                 if execute {
-                    println!("\nCleaned up {} process(es).", result.total_scanned);
+                    println!("\nCleaned up {} process(es).", result.orphan_count);
                 } else {
                     println!("\nDry-run mode. Use --execute to clean up these processes.");
                 }

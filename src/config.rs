@@ -23,34 +23,30 @@ pub struct LoggingConfig {
 
 impl Default for Config {
     fn default() -> Self {
-        // For Default trait, we need a fallback since we can't return Result
-        // This is only used in tests and edge cases
-        let home = dirs::home_dir().unwrap_or_else(|| {
+        Self::new_default().unwrap_or_else(|_| {
             eprintln!("Warning: HOME directory not found, using current directory");
-            PathBuf::from(".")
-        });
-        let log_path = home
-            .join(".proc-janitor")
-            .join("logs")
-            .to_string_lossy()
-            .to_string();
-
-        Self {
-            scan_interval: 5,
-            grace_period: 30,
-            sigterm_timeout: 5,
-            targets: vec![
-                "node.*claude".to_string(),
-                "claude".to_string(),
-                "node.*mcp".to_string(),
-            ],
-            whitelist: vec!["node.*server".to_string(), "pm2".to_string()],
-            logging: LoggingConfig {
-                enabled: true,
-                path: log_path,
-                retention_days: 7,
-            },
-        }
+            let log_path = PathBuf::from(".")
+                .join(".proc-janitor")
+                .join("logs")
+                .to_string_lossy()
+                .to_string();
+            Self {
+                scan_interval: 5,
+                grace_period: 30,
+                sigterm_timeout: 5,
+                targets: vec![
+                    "node.*claude".to_string(),
+                    "claude".to_string(),
+                    "node.*mcp".to_string(),
+                ],
+                whitelist: vec!["node.*server".to_string(), "pm2".to_string()],
+                logging: LoggingConfig {
+                    enabled: true,
+                    path: log_path,
+                    retention_days: 7,
+                },
+            }
+        })
     }
 }
 
@@ -135,6 +131,8 @@ impl Config {
                 } else {
                     eprintln!("Warning: PROC_JANITOR_SCAN_INTERVAL out of range (1-3600): {}, using default", v);
                 }
+            } else {
+                eprintln!("Warning: PROC_JANITOR_SCAN_INTERVAL is not a valid number: {}", val);
             }
         }
 
@@ -145,6 +143,8 @@ impl Config {
                 } else {
                     eprintln!("Warning: PROC_JANITOR_GRACE_PERIOD out of range (0-3600): {}, using default", v);
                 }
+            } else {
+                eprintln!("Warning: PROC_JANITOR_GRACE_PERIOD is not a valid number: {}", val);
             }
         }
 
@@ -155,6 +155,8 @@ impl Config {
                 } else {
                     eprintln!("Warning: PROC_JANITOR_SIGTERM_TIMEOUT out of range (1-60): {}, using default", v);
                 }
+            } else {
+                eprintln!("Warning: PROC_JANITOR_SIGTERM_TIMEOUT is not a valid number: {}", val);
             }
         }
 
@@ -180,6 +182,8 @@ impl Config {
         if let Ok(val) = std::env::var("PROC_JANITOR_LOG_ENABLED") {
             if let Ok(v) = val.parse::<bool>() {
                 self.logging.enabled = v;
+            } else {
+                eprintln!("Warning: PROC_JANITOR_LOG_ENABLED is not a valid boolean: {}", val);
             }
         }
 
@@ -198,6 +202,8 @@ impl Config {
                 } else {
                     eprintln!("Warning: PROC_JANITOR_LOG_RETENTION_DAYS out of range (0-365): {}, using default", v);
                 }
+            } else {
+                eprintln!("Warning: PROC_JANITOR_LOG_RETENTION_DAYS is not a valid number: {}", val);
             }
         }
     }
@@ -304,6 +310,12 @@ pub fn edit() -> Result<()> {
         .arg(&path)
         .status()
         .with_context(|| format!("Failed to open editor for config: {}", path.display()))?;
+
+    // Validate the edited config
+    match Config::load() {
+        Ok(_) => println!("Configuration validated successfully."),
+        Err(e) => eprintln!("Warning: Configuration has errors: {}", e),
+    }
 
     Ok(())
 }

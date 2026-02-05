@@ -74,7 +74,7 @@ impl std::str::FromStr for SessionSource {
             "terminal" | "term" => SessionSource::Terminal,
             "vscode" | "vs-code" => SessionSource::VsCode,
             "tmux" => SessionSource::Tmux,
-            other => SessionSource::Custom(other.to_string()),
+            _ => SessionSource::Custom(s.to_string()),
         })
     }
 }
@@ -120,13 +120,8 @@ impl SessionStore {
     pub fn save(&self) -> Result<()> {
         ensure_data_dir()?;
         let path = sessions_path()?;
-        let temp_path = path.with_extension("json.tmp");
 
-        // Write to temp file first
-        let content = serde_json::to_string_pretty(self)?;
-        fs::write(&temp_path, &content)?;
-
-        // Open original file for exclusive lock (create if doesn't exist)
+        // Open file for exclusive lock FIRST (before writing anything)
         let file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -141,6 +136,11 @@ impl SessionStore {
 
         file.lock_exclusive()
             .with_context(|| "Failed to acquire exclusive lock on sessions file")?;
+
+        // Write to temp file UNDER the lock
+        let temp_path = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        let content = serde_json::to_string_pretty(self)?;
+        fs::write(&temp_path, &content)?;
 
         // Atomic rename
         fs::rename(&temp_path, &path)
@@ -455,20 +455,36 @@ fn get_current_tty() -> Option<String> {
 
 /// Find all descendant PIDs from a list of parent PIDs
 fn find_descendant_pids(sys: &System, parent_pids: &[u32]) -> Vec<u32> {
+    // Build parent->children map once for O(n) traversal
+    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (pid, process) in sys.processes() {
+        if let Some(parent) = process.parent() {
+            children_map
+                .entry(parent.as_u32())
+                .or_default()
+                .push(pid.as_u32());
+        }
+    }
+
     let mut result = Vec::new();
+    let mut visited = std::collections::HashSet::new();
     let mut to_check: Vec<u32> = parent_pids.to_vec();
 
     while let Some(pid) = to_check.pop() {
+        if !visited.insert(pid) {
+            continue; // Already visited
+        }
+
         // Check if process still exists
         if sys.process(sysinfo::Pid::from_u32(pid)).is_some() {
             result.push(pid);
         }
 
-        // Find children
-        for (child_pid, process) in sys.processes() {
-            if let Some(parent) = process.parent() {
-                if parent.as_u32() == pid && !result.contains(&child_pid.as_u32()) {
-                    to_check.push(child_pid.as_u32());
+        // Add children to check
+        if let Some(children) = children_map.get(&pid) {
+            for &child_pid in children {
+                if !visited.contains(&child_pid) {
+                    to_check.push(child_pid);
                 }
             }
         }
@@ -477,79 +493,11 @@ fn find_descendant_pids(sys: &System, parent_pids: &[u32]) -> Vec<u32> {
     result
 }
 
-/// Kill a process with SIGTERM, then SIGKILL
-///
-/// Safety measures:
-/// - Refuses to kill system-critical PIDs (0, 1, 2)
-/// - Uses checked i32 conversion to avoid wrapping on large PIDs
-/// - Verifies process existence via sysinfo before sending signals
-/// - Properly handles errors (ignoring ESRCH for already-exited processes)
+/// Kill a process using shared kill logic with configurable timeout
 fn kill_process(pid: u32) -> Result<()> {
-    use nix::errno::Errno;
-    use nix::sys::signal::{kill, Signal};
-    use nix::unistd::Pid;
-
-    // Guard against killing system-critical processes
-    if pid == 0 || pid == 1 || pid == 2 {
-        bail!("Refusing to kill system process (PID {})", pid);
-    }
-
-    // Safe PID conversion: reject values that exceed i32::MAX
-    let raw_pid = i32::try_from(pid).context("PID exceeds i32 range")?;
-    let nix_pid = Pid::from_raw(raw_pid);
-
-    // Verify the process actually exists before attempting to kill it.
-    // This mitigates (but cannot fully prevent) PID reuse attacks.
-    {
-        let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-        );
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
-        if sys.process(sysinfo::Pid::from_u32(pid)).is_none() {
-            tracing::debug!("PID {} no longer exists, skipping kill", pid);
-            return Ok(());
-        }
-    }
-
-    // Try SIGTERM first for graceful shutdown
-    match kill(nix_pid, Signal::SIGTERM) {
-        Ok(()) => {}
-        Err(Errno::ESRCH) => {
-            // Process already exited between our check and signal
-            return Ok(());
-        }
-        Err(e) => {
-            return Err(e).with_context(|| format!("Failed to send SIGTERM to PID {}", pid));
-        }
-    }
-
-    // Give the process time to handle SIGTERM
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    // Check if still alive; if so, escalate to SIGKILL
-    match kill(nix_pid, None) {
-        Ok(()) => {
-            // Process still alive, force kill
-            match kill(nix_pid, Signal::SIGKILL) {
-                Ok(()) => {}
-                Err(Errno::ESRCH) => {
-                    // Exited between check and SIGKILL
-                }
-                Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("Failed to send SIGKILL to PID {}", pid));
-                }
-            }
-        }
-        Err(Errno::ESRCH) => {
-            // Process exited after SIGTERM, success
-        }
-        Err(e) => {
-            return Err(e)
-                .with_context(|| format!("Failed to check if PID {} is still alive", pid));
-        }
-    }
-
+    // Use the shared kill module with default 5-second timeout
+    // Pass None for start_time since session tracking doesn't capture it yet
+    crate::kill::kill_process(pid, None, 5)?;
     Ok(())
 }
 

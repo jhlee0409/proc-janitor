@@ -11,6 +11,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+/// Maximum number of polling iterations when waiting for daemon to stop
+const DAEMON_STOP_MAX_POLLS: u32 = 50;
+
+/// Interval between polls when waiting for daemon to stop (milliseconds)
+const DAEMON_STOP_POLL_INTERVAL_MS: u64 = 100;
+
 #[derive(Serialize)]
 pub struct DaemonStatus {
     pub running: bool,
@@ -58,11 +64,6 @@ impl Daemon {
         if let Err(e) = logger::init_logger() {
             eprintln!("Warning: Failed to initialize logger: {}", e);
             // Continue without file logging
-        }
-
-        // Cleanup old logs
-        if let Err(e) = logger::cleanup_old_logs() {
-            tracing::warn!("Failed to cleanup old logs: {}", e);
         }
 
         self.running.store(true, Ordering::SeqCst);
@@ -113,8 +114,9 @@ impl Daemon {
 
 /// Get the PID file path
 fn get_pid_file_path() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME environment variable not set")?;
-    let pid_dir = PathBuf::from(home).join(".proc-janitor");
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
+    let pid_dir = home.join(".proc-janitor");
 
     // Create directory if it doesn't exist
     fs::create_dir_all(&pid_dir).context("Failed to create PID directory")?;
@@ -165,8 +167,9 @@ pub fn is_daemon_running() -> bool {
 
 /// Daemonize the process
 pub fn daemonize() -> Result<()> {
-    let home = std::env::var("HOME").context("HOME environment variable not set")?;
-    let daemon_dir = PathBuf::from(home).join(".proc-janitor");
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
+    let daemon_dir = home.join(".proc-janitor");
 
     // Create directory if it doesn't exist
     fs::create_dir_all(&daemon_dir).context("Failed to create daemon directory")?;
@@ -278,11 +281,11 @@ pub fn stop() -> Result<()> {
 
         println!("Sent SIGTERM to daemon (PID: {})", pid);
 
-        // Poll for process termination (max 5 seconds, 100ms intervals)
-        let max_wait = 50; // 50 * 100ms = 5 seconds
+        // Poll for process termination
+        let max_wait = DAEMON_STOP_MAX_POLLS;
         let mut terminated = false;
         for _ in 0..max_wait {
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(DAEMON_STOP_POLL_INTERVAL_MS));
             if kill(nix_pid, None).is_err() {
                 // Process no longer exists
                 terminated = true;
@@ -294,8 +297,9 @@ pub fn stop() -> Result<()> {
             println!("Daemon stopped successfully (PID: {})", pid);
         } else {
             println!(
-                "Warning: Daemon (PID: {}) did not terminate within 5 seconds",
-                pid
+                "Warning: Daemon (PID: {}) did not terminate within {} seconds",
+                pid,
+                (DAEMON_STOP_MAX_POLLS as u64 * DAEMON_STOP_POLL_INTERVAL_MS) / 1000
             );
         }
 

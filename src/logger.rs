@@ -62,13 +62,6 @@ fn init_logger_with_config(config: &LoggingConfig) -> Result<()> {
     Ok(())
 }
 
-/// Clean up old log files (loads config automatically)
-pub fn cleanup_old_logs() -> Result<()> {
-    let config = Config::load()?;
-    let log_path = PathBuf::from(&config.logging.path);
-    cleanup_old_logs_with_params(&log_path, config.logging.retention_days)
-}
-
 /// Clean up old log files based on retention policy
 fn cleanup_old_logs_with_params(path: &Path, retention_days: u32) -> Result<()> {
     if retention_days == 0 {

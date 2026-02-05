@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
@@ -49,12 +49,24 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
     let target_patterns: Vec<Regex> = config
         .targets
         .iter()
-        .filter_map(|p| Regex::new(p).ok())
+        .filter_map(|p| match Regex::new(p) {
+            Ok(re) => Some(re),
+            Err(e) => {
+                eprintln!("Warning: Invalid target pattern '{}': {}", p, e);
+                None
+            }
+        })
         .collect();
     let whitelist_patterns: Vec<Regex> = config
         .whitelist
         .iter()
-        .filter_map(|p| Regex::new(p).ok())
+        .filter_map(|p| match Regex::new(p) {
+            Ok(re) => Some(re),
+            Err(e) => {
+                eprintln!("Warning: Invalid whitelist pattern '{}': {}", p, e);
+                None
+            }
+        })
         .collect();
 
     let mut nodes = HashMap::new();
@@ -151,7 +163,7 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
         println!("── Showing target processes only ──");
         println!();
         for node in &targets {
-            print_node(node, "", true, &nodes);
+            print_node(node, "");
         }
     } else {
         // Show process tree starting from init (PID 1)
@@ -221,7 +233,7 @@ fn print_subtree(
     nodes: &HashMap<u32, ProcessNode>,
 ) {
     let connector = if is_last { "└── " } else { "├── " };
-    print_node(node, &format!("{}{}", prefix, connector), false, nodes);
+    print_node(node, &format!("{}{}", prefix, connector));
 
     let new_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
 
@@ -247,10 +259,7 @@ fn print_subtree(
 fn print_node(
     node: &ProcessNode,
     prefix: &str,
-    _standalone: bool,
-    _nodes: &HashMap<u32, ProcessNode>,
 ) {
-    let _ = (_standalone, _nodes); // Silence unused parameter warnings
     let mut markers = String::new();
     if node.is_target && !node.is_whitelisted {
         markers.push('🎯');
@@ -330,25 +339,14 @@ pub fn generate_dashboard() -> Result<PathBuf> {
     let nodes_json: Vec<String> = targets
         .iter()
         .map(|n| {
-            format!(
-                r#"{{
-                    "id": {},
-                    "label": "{} ({})",
-                    "title": "PID: {}\nMemory: {:.1}MB\nCmd: {}",
-                    "color": "{}",
-                    "shape": "{}",
-                    "size": {}
-                }}"#,
-                n.pid,
-                html_escape(&n.name),
-                n.pid,
-                n.pid,
-                n.memory_mb,
-                html_escape(&n.cmdline.replace('\n', " ")),
-                if n.is_orphan { "#e74c3c" } else { "#f39c12" },
-                if n.is_orphan { "diamond" } else { "dot" },
-                (n.memory_mb / 10.0).clamp(10.0, 50.0) as i32
-            )
+            serde_json::json!({
+                "id": n.pid,
+                "label": format!("{} ({})", n.name, n.pid),
+                "title": format!("PID: {}\nMemory: {:.1}MB\nCmd: {}", n.pid, n.memory_mb, n.cmdline.replace('\n', " ")),
+                "color": if n.is_orphan { "#e74c3c" } else { "#f39c12" },
+                "shape": if n.is_orphan { "diamond" } else { "dot" },
+                "size": (n.memory_mb / 10.0).clamp(10.0, 50.0) as i32
+            }).to_string()
         })
         .collect();
 
@@ -367,21 +365,14 @@ pub fn generate_dashboard() -> Result<PathBuf> {
     let parent_nodes_json: Vec<String> = parent_nodes
         .iter()
         .map(|n| {
-            format!(
-                r##"{{
-                    "id": {},
-                    "label": "{} ({})",
-                    "title": "PID: {}\nMemory: {:.1}MB",
-                    "color": "#95a5a6",
-                    "shape": "dot",
-                    "size": 15
-                }}"##,
-                n.pid,
-                html_escape(&n.name),
-                n.pid,
-                n.pid,
-                n.memory_mb
-            )
+            serde_json::json!({
+                "id": n.pid,
+                "label": format!("{} ({})", n.name, n.pid),
+                "title": format!("PID: {}\nMemory: {:.1}MB", n.pid, n.memory_mb),
+                "color": "#95a5a6",
+                "shape": "dot",
+                "size": 15
+            }).to_string()
         })
         .collect();
 
@@ -403,20 +394,13 @@ pub fn generate_dashboard() -> Result<PathBuf> {
         .sessions
         .values()
         .map(|s| {
-            format!(
-                r#"{{
-                    "id": "{}",
-                    "name": "{}",
-                    "source": "{}",
-                    "pids": {:?},
-                    "created": "{}"
-                }}"#,
-                html_escape(&s.id),
-                html_escape(s.name.as_deref().unwrap_or("")),
-                html_escape(&s.source.to_string()),
-                s.pids,
-                s.created_at.format("%Y-%m-%d %H:%M:%S")
-            )
+            serde_json::json!({
+                "id": s.id,
+                "name": s.name.as_deref().unwrap_or(""),
+                "source": s.source.to_string(),
+                "pids": s.pids,
+                "created": s.created_at.format("%Y-%m-%d %H:%M:%S").to_string()
+            }).to_string()
         })
         .collect();
     let sessions_json_str = sessions_json.join(",\n        ");
@@ -732,12 +716,11 @@ pub fn generate_dashboard() -> Result<PathBuf> {
         sessions_json_str,
         orphan_targets
             .iter()
-            .map(|n| format!(
-                r#"{{"pid": {}, "name": "{}", "memory": {:.1}}}"#,
-                n.pid,
-                html_escape(&n.name),
-                n.memory_mb
-            ))
+            .map(|n| serde_json::json!({
+                "pid": n.pid,
+                "name": n.name,
+                "memory": n.memory_mb
+            }).to_string())
             .collect::<Vec<_>>()
             .join(",\n        ")
     );
@@ -749,23 +732,23 @@ pub fn generate_dashboard() -> Result<PathBuf> {
         .join(".proc-janitor")
         .join("dashboard.html");
 
-    fs::create_dir_all(output_path.parent().unwrap())?;
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    } else {
+        anyhow::bail!("Cannot determine parent directory for dashboard output path");
+    }
     fs::write(&output_path, html)?;
 
     Ok(output_path)
 }
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
 fn is_ancestor(potential_ancestor: u32, target: u32, nodes: &HashMap<u32, ProcessNode>) -> bool {
     let mut current = target;
+    let mut visited = HashSet::new();
     while let Some(node) = nodes.get(&current) {
+        if !visited.insert(current) {
+            break; // Cycle detected
+        }
         if node.ppid == potential_ancestor {
             return true;
         }

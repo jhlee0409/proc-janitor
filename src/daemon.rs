@@ -9,6 +9,14 @@ use std::path::PathBuf;
 use std::fs;
 use daemonize::Daemonize;
 use fs2::FileExt;
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct DaemonStatus {
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub stale_pid_file: bool,
+}
 
 pub struct Daemon {
     config: Config,
@@ -305,19 +313,32 @@ pub fn stop() -> Result<()> {
 }
 
 /// Show daemon status (called from CLI)
-pub fn status() -> Result<()> {
-    if is_daemon_running() {
-        if let Some(pid) = get_daemon_pid() {
-            println!("Daemon is running (PID: {})", pid);
-        } else {
-            println!("Daemon is running (PID unknown)");
-        }
-    } else {
-        println!("Daemon is not running");
+pub fn status(json: bool) -> Result<()> {
+    let running = is_daemon_running();
+    let pid = get_daemon_pid();
+    let stale_pid_file = !running && pid.is_some();
 
-        // Check for stale PID file
-        if get_daemon_pid().is_some() {
-            println!("(Stale PID file found, daemon might have crashed)");
+    if json {
+        let status = DaemonStatus {
+            running,
+            pid,
+            stale_pid_file,
+        };
+        println!("{}", serde_json::to_string_pretty(&status)?);
+    } else {
+        if running {
+            if let Some(pid) = pid {
+                println!("Daemon is running (PID: {})", pid);
+            } else {
+                println!("Daemon is running (PID unknown)");
+            }
+        } else {
+            println!("Daemon is not running");
+
+            // Check for stale PID file
+            if stale_pid_file {
+                println!("(Stale PID file found, daemon might have crashed)");
+            }
         }
     }
     Ok(())

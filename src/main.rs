@@ -26,7 +26,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Status => {
-            daemon::status()?;
+            daemon::status(cli.json)?;
         }
 
         Commands::Scan { execute } => {
@@ -97,7 +97,7 @@ fn main() -> Result<()> {
                     config::edit()?;
                 }
                 ConfigCommands::Show => {
-                    config::show()?;
+                    config::show(cli.json)?;
                 }
             }
         }

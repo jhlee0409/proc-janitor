@@ -312,15 +312,19 @@ pub fn edit() -> Result<()> {
 }
 
 /// Show current configuration
-pub fn show() -> Result<()> {
+pub fn show(json: bool) -> Result<()> {
     let config = Config::load()?;
-    let content = toml::to_string_pretty(&config)?;
 
-    println!("Current configuration:");
-    println!("----------------------");
-    println!("{}", content);
-    println!("----------------------");
-    println!("Config file: {}", config_path()?.display());
+    if json {
+        println!("{}", serde_json::to_string_pretty(&config)?);
+    } else {
+        let content = toml::to_string_pretty(&config)?;
+        println!("Current configuration:");
+        println!("----------------------");
+        println!("{}", content);
+        println!("----------------------");
+        println!("Config file: {}", config_path()?.display());
+    }
 
     Ok(())
 }

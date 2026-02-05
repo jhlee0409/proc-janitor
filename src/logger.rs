@@ -21,7 +21,8 @@ fn init_logger_with_config(config: &LoggingConfig) -> Result<()> {
             .with_target(true)
             .with_level(true)
             .with_env_filter(EnvFilter::from_default_env().add_directive(Level::INFO.into()))
-            .init();
+            .try_init()
+            .ok();
         return Ok(());
     }
 
@@ -52,7 +53,8 @@ fn init_logger_with_config(config: &LoggingConfig) -> Result<()> {
         .with(EnvFilter::from_default_env().add_directive(Level::INFO.into()))
         .with(file_layer)
         .with(stdout_layer)
-        .init();
+        .try_init()
+        .ok();
 
     // Clean up old logs
     cleanup_old_logs_with_params(&log_path, config.retention_days)?;

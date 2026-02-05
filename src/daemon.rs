@@ -3,7 +3,6 @@ use crate::logger;
 use crate::scanner::{self, Scanner};
 use anyhow::{bail, Context, Result};
 use daemonize::Daemonize;
-use fs2::FileExt;
 use owo_colors::OwoColorize;
 use serde::Serialize;
 use std::fs;
@@ -203,7 +202,7 @@ pub fn start(foreground: bool) -> Result<()> {
         .context("Failed to open PID file for locking")?;
 
     // Try non-blocking lock - if it fails, another daemon holds it
-    if lock_file.try_lock_exclusive().is_err() {
+    if fs2::FileExt::try_lock_exclusive(&lock_file).is_err() {
         if let Some(old_pid) = get_daemon_pid() {
             bail!("Daemon already running with PID {old_pid}");
         }
@@ -220,7 +219,7 @@ pub fn start(foreground: bool) -> Result<()> {
         if kill(nix_pid, None).is_ok() {
             // Process exists and we have the lock - this shouldn't happen
             // but if it does, the other process doesn't hold the lock
-            let _ = lock_file.unlock();
+            let _ = fs2::FileExt::unlock(&lock_file);
             bail!("Daemon already running with PID {old_pid}");
         }
         tracing::info!("Removing stale PID file from previous crash...");
@@ -296,15 +295,24 @@ pub fn stop() -> Result<()> {
 
         if terminated {
             println!("Daemon stopped successfully (PID: {pid})");
+            remove_pid_file()?;
         } else {
-            println!(
-                "Warning: Daemon (PID: {}) did not terminate within {} seconds",
+            // Escalate to SIGKILL if SIGTERM didn't work
+            eprintln!(
+                "Warning: Daemon (PID: {}) did not terminate within {} seconds, sending SIGKILL...",
                 pid,
                 (DAEMON_STOP_MAX_POLLS as u64 * DAEMON_STOP_POLL_INTERVAL_MS) / 1000
             );
+            let _ = kill(nix_pid, Signal::SIGKILL);
+            // Brief wait for SIGKILL to take effect
+            std::thread::sleep(Duration::from_millis(500));
+            if kill(nix_pid, None).is_err() {
+                println!("Daemon force-killed successfully (PID: {pid})");
+                remove_pid_file()?;
+            } else {
+                eprintln!("Error: Failed to kill daemon (PID: {pid}). PID file retained.");
+            }
         }
-
-        remove_pid_file()?;
 
         Ok(())
     } else {

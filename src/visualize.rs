@@ -149,16 +149,30 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
         .collect();
     let orphan_targets: Vec<_> = targets.iter().filter(|n| n.is_orphan).collect();
 
-    println!("╔══════════════════════════════════════════════════════════════════════════════╗");
-    println!("║                         proc-janitor Process Tree                            ║");
-    println!("╠══════════════════════════════════════════════════════════════════════════════╣");
-    println!(
-        "║  Total: {}  │  Targets: {}  │  Orphan Targets: {} (cleanable)              ║",
+    let stats_line = format!(
+        "  Total: {}  |  Targets: {}  |  Orphan Targets: {} (cleanable)",
         total,
         targets.len(),
         orphan_targets.len()
     );
-    println!("╚══════════════════════════════════════════════════════════════════════════════╝");
+    let box_width = 78;
+    let title = "proc-janitor Process Tree";
+    let title_pad = (box_width - 2 - title.len()) / 2;
+    println!("{}", "=".repeat(box_width));
+    println!(
+        "|{}{}{}|",
+        " ".repeat(title_pad),
+        title,
+        " ".repeat(box_width - 2 - title_pad - title.len())
+    );
+    println!("{}", "=".repeat(box_width));
+    let stats_pad = box_width - 2 - stats_line.len();
+    if stats_pad > 0 {
+        println!("|{}{}|", stats_line, " ".repeat(stats_pad));
+    } else {
+        println!("| {stats_line} |");
+    }
+    println!("{}", "=".repeat(box_width));
     println!();
 
     // Legend
@@ -713,16 +727,23 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         if (cleanableProcesses.length === 0) {{
             processList.innerHTML = '<div class="empty-state"><div class="emoji">✨</div><div>No orphan processes found</div></div>';
         }} else {{
-            processList.innerHTML = cleanableProcesses.map(p => `
-                <div class="process-card">
-                    <div class="process-name">${{p.name}}</div>
-                    <div class="process-detail">PID: ${{p.pid}} | Memory: ${{p.memory.toFixed(1)}} MB</div>
-                    <div class="process-badges">
-                        <span class="badge orphan">Orphan</span>
-                        <span class="badge target">Target</span>
-                    </div>
-                </div>
-            `).join('');
+            cleanableProcesses.forEach(p => {{
+                const card = document.createElement('div');
+                card.className = 'process-card';
+                const nameDiv = document.createElement('div');
+                nameDiv.className = 'process-name';
+                nameDiv.textContent = p.name;
+                const detailDiv = document.createElement('div');
+                detailDiv.className = 'process-detail';
+                detailDiv.textContent = 'PID: ' + p.pid + ' | Memory: ' + p.memory.toFixed(1) + ' MB';
+                const badges = document.createElement('div');
+                badges.className = 'process-badges';
+                badges.innerHTML = '<span class="badge orphan">Orphan</span><span class="badge target">Target</span>';
+                card.appendChild(nameDiv);
+                card.appendChild(detailDiv);
+                card.appendChild(badges);
+                processList.appendChild(card);
+            }});
         }}
 
         // Render session list
@@ -730,13 +751,23 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         if (sessions.length === 0) {{
             sessionList.innerHTML = '<div class="empty-state"><div class="emoji">📭</div><div>No active sessions</div></div>';
         }} else {{
-            sessionList.innerHTML = sessions.map(s => `
-                <div class="session-card">
-                    <div class="process-name">${{s.name || s.id}}</div>
-                    <div class="process-detail">Source: ${{s.source}} | PIDs: ${{s.pids.length}}</div>
-                    <div class="process-detail">Created: ${{s.created}}</div>
-                </div>
-            `).join('');
+            sessions.forEach(s => {{
+                const card = document.createElement('div');
+                card.className = 'session-card';
+                const nameDiv = document.createElement('div');
+                nameDiv.className = 'process-name';
+                nameDiv.textContent = s.name || s.id;
+                const detailDiv1 = document.createElement('div');
+                detailDiv1.className = 'process-detail';
+                detailDiv1.textContent = 'Source: ' + s.source + ' | PIDs: ' + s.pids.length;
+                const detailDiv2 = document.createElement('div');
+                detailDiv2.className = 'process-detail';
+                detailDiv2.textContent = 'Created: ' + s.created;
+                card.appendChild(nameDiv);
+                card.appendChild(detailDiv1);
+                card.appendChild(detailDiv2);
+                sessionList.appendChild(card);
+            }});
         }}
     </script>
 </body>
@@ -813,13 +844,29 @@ pub fn open_dashboard(live: bool, interval: u64) -> Result<()> {
     std::process::Command::new("xdg-open").arg(&path).spawn()?;
 
     if live {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let r = Arc::clone(&running);
+        ctrlc::set_handler(move || {
+            r.store(false, Ordering::SeqCst);
+        })
+        .ok(); // ok() because handler may already be set by daemon
+
         println!(
             "Live mode: refreshing every {interval}s. Press Ctrl+C to stop."
         );
-        loop {
+        while running.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_secs(interval));
-            generate_dashboard(refresh_secs)?;
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+            if let Err(e) = generate_dashboard(refresh_secs) {
+                eprintln!("Warning: Failed to regenerate dashboard: {e}");
+            }
         }
+        println!("\nLive mode stopped.");
     }
 
     Ok(())

@@ -385,8 +385,8 @@ fn detect_orphan_categories() -> Vec<(String, Vec<String>, usize)> {
                     .collect::<Vec<_>>()
                     .join(" ");
                 if !cmdline.is_empty() {
-                    let display = if cmdline.len() > 60 {
-                        format!("{}...", &cmdline[..57])
+                    let display = if cmdline.chars().count() > 60 {
+                        format!("{}...", cmdline.chars().take(57).collect::<String>())
                     } else {
                         cmdline
                     };

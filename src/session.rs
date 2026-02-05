@@ -5,7 +5,6 @@
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -99,7 +98,7 @@ impl SessionStore {
             .open(&path)
             .with_context(|| format!("Failed to open sessions file: {}", path.display()))?;
 
-        file.lock_shared()
+        fs2::FileExt::lock_shared(&file)
             .with_context(|| "Failed to acquire shared lock on sessions file")?;
 
         // Read directly from the locked file handle to avoid TOCTOU race
@@ -107,7 +106,7 @@ impl SessionStore {
         file.read_to_string(&mut content)
             .with_context(|| format!("Failed to read sessions file: {}", path.display()))?;
 
-        file.unlock()
+        fs2::FileExt::unlock(&file)
             .with_context(|| "Failed to release lock on sessions file")?;
 
         // Parse JSON with corruption recovery
@@ -148,7 +147,7 @@ impl SessionStore {
                 )
             })?;
 
-        file.lock_exclusive()
+        fs2::FileExt::lock_exclusive(&file)
             .with_context(|| "Failed to acquire exclusive lock on sessions file")?;
 
         // Serialize content
@@ -161,7 +160,7 @@ impl SessionStore {
         (&file).write_all(content.as_bytes())
             .with_context(|| "Failed to write sessions file")?;
 
-        file.unlock()
+        fs2::FileExt::unlock(&file)
             .with_context(|| "Failed to release lock on sessions file")?;
 
         Ok(())
@@ -410,9 +409,9 @@ pub fn unregister(session_id: &str) -> Result<()> {
 
 /// Auto-detect and clean orphaned sessions
 pub fn auto_clean(dry_run: bool) -> Result<()> {
-    let store = SessionStore::load()?;
+    let mut store = SessionStore::load()?;
 
-    // Find stale sessions first (without deleting from store yet)
+    // Find stale sessions first
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
@@ -439,14 +438,33 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
 
     println!("Found {} stale session(s):", stale_ids.len());
 
-    // Clean processes for each stale session
     for id in &stale_ids {
-        println!("  {id}");
-        if !dry_run {
-            if let Err(e) = clean_session(id, false) {
-                tracing::warn!("Failed to clean session {}: {}", id, e);
+        if let Some(session) = store.sessions.get(id) {
+            println!(
+                "  {} ({}) - {} tracked PIDs",
+                id,
+                session.source,
+                session.pids.len()
+            );
+
+            if !dry_run {
+                // Kill descendant processes
+                let pids_to_clean = find_descendant_pids(&sys, &session.pids);
+                for pid in &pids_to_clean {
+                    let _ = kill_process(*pid);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
             }
         }
+    }
+
+    // Remove all stale sessions at once and save once
+    if !dry_run {
+        for id in &stale_ids {
+            store.sessions.remove(id);
+        }
+        store.save()?;
+        println!("Removed {} stale session(s).", stale_ids.len());
     }
 
     Ok(())

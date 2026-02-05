@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use owo_colors::OwoColorize;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -19,6 +20,11 @@ pub struct LoggingConfig {
     pub enabled: bool,
     pub path: String,
     pub retention_days: u32,
+}
+
+fn use_color() -> bool {
+    std::env::var("NO_COLOR").is_err()
+        && supports_color::on(supports_color::Stream::Stdout).is_some()
 }
 
 impl Default for Config {
@@ -81,11 +87,11 @@ impl Config {
     /// Validate all regex patterns in the configuration
     pub fn validate(&self) -> Result<()> {
         for pattern in &self.targets {
-            Regex::new(pattern).with_context(|| format!("Invalid target pattern: {}", pattern))?;
+            Regex::new(pattern).with_context(|| format!("Invalid target pattern: {pattern}"))?;
         }
         for pattern in &self.whitelist {
             Regex::new(pattern)
-                .with_context(|| format!("Invalid whitelist pattern: {}", pattern))?;
+                .with_context(|| format!("Invalid whitelist pattern: {pattern}"))?;
         }
         Ok(())
     }
@@ -129,10 +135,10 @@ impl Config {
                 if (1..=3600).contains(&v) {
                     self.scan_interval = v;
                 } else {
-                    eprintln!("Warning: PROC_JANITOR_SCAN_INTERVAL out of range (1-3600): {}, using default", v);
+                    eprintln!("Warning: PROC_JANITOR_SCAN_INTERVAL out of range (1-3600): {v}, using default");
                 }
             } else {
-                eprintln!("Warning: PROC_JANITOR_SCAN_INTERVAL is not a valid number: {}", val);
+                eprintln!("Warning: PROC_JANITOR_SCAN_INTERVAL is not a valid number: {val}");
             }
         }
 
@@ -141,10 +147,10 @@ impl Config {
                 if v <= 3600 {
                     self.grace_period = v;
                 } else {
-                    eprintln!("Warning: PROC_JANITOR_GRACE_PERIOD out of range (0-3600): {}, using default", v);
+                    eprintln!("Warning: PROC_JANITOR_GRACE_PERIOD out of range (0-3600): {v}, using default");
                 }
             } else {
-                eprintln!("Warning: PROC_JANITOR_GRACE_PERIOD is not a valid number: {}", val);
+                eprintln!("Warning: PROC_JANITOR_GRACE_PERIOD is not a valid number: {val}");
             }
         }
 
@@ -153,10 +159,10 @@ impl Config {
                 if (1..=60).contains(&v) {
                     self.sigterm_timeout = v;
                 } else {
-                    eprintln!("Warning: PROC_JANITOR_SIGTERM_TIMEOUT out of range (1-60): {}, using default", v);
+                    eprintln!("Warning: PROC_JANITOR_SIGTERM_TIMEOUT out of range (1-60): {v}, using default");
                 }
             } else {
-                eprintln!("Warning: PROC_JANITOR_SIGTERM_TIMEOUT is not a valid number: {}", val);
+                eprintln!("Warning: PROC_JANITOR_SIGTERM_TIMEOUT is not a valid number: {val}");
             }
         }
 
@@ -183,7 +189,7 @@ impl Config {
             if let Ok(v) = val.parse::<bool>() {
                 self.logging.enabled = v;
             } else {
-                eprintln!("Warning: PROC_JANITOR_LOG_ENABLED is not a valid boolean: {}", val);
+                eprintln!("Warning: PROC_JANITOR_LOG_ENABLED is not a valid boolean: {val}");
             }
         }
 
@@ -191,7 +197,7 @@ impl Config {
             if Self::is_safe_log_path(&val) {
                 self.logging.path = val;
             } else {
-                eprintln!("Warning: PROC_JANITOR_LOG_PATH rejected for security reasons: {}, using default", val);
+                eprintln!("Warning: PROC_JANITOR_LOG_PATH rejected for security reasons: {val}, using default");
             }
         }
 
@@ -200,10 +206,10 @@ impl Config {
                 if v <= 365 {
                     self.logging.retention_days = v;
                 } else {
-                    eprintln!("Warning: PROC_JANITOR_LOG_RETENTION_DAYS out of range (0-365): {}, using default", v);
+                    eprintln!("Warning: PROC_JANITOR_LOG_RETENTION_DAYS out of range (0-365): {v}, using default");
                 }
             } else {
-                eprintln!("Warning: PROC_JANITOR_LOG_RETENTION_DAYS is not a valid number: {}", val);
+                eprintln!("Warning: PROC_JANITOR_LOG_RETENTION_DAYS is not a valid number: {val}");
             }
         }
     }
@@ -315,8 +321,7 @@ fn get_preset(name: &str) -> Result<Preset> {
             whitelist: vec![],
         }),
         _ => anyhow::bail!(
-            "Unknown preset: '{}'. Available: claude, dev, minimal",
-            name
+            "Unknown preset: '{name}'. Available: claude, dev, minimal"
         ),
     }
 }
@@ -326,7 +331,7 @@ fn format_toml_array(items: &[&str]) -> String {
     if items.is_empty() {
         return "targets = []".to_string();
     }
-    let entries: Vec<String> = items.iter().map(|s| format!("    \"{}\",", s)).collect();
+    let entries: Vec<String> = items.iter().map(|s| format!("    \"{s}\",")).collect();
     format!("targets = [\n{}\n]", entries.join("\n"))
 }
 
@@ -334,7 +339,7 @@ fn format_toml_whitelist(items: &[&str]) -> String {
     if items.is_empty() {
         return "whitelist = []".to_string();
     }
-    let entries: Vec<String> = items.iter().map(|s| format!("    \"{}\",", s)).collect();
+    let entries: Vec<String> = items.iter().map(|s| format!("    \"{s}\",")).collect();
     format!("whitelist = [\n{}\n]", entries.join("\n"))
 }
 
@@ -364,7 +369,7 @@ fn detect_orphan_categories() -> Vec<(String, Vec<String>, usize)> {
 
     for &(category, name_patterns, suggested) in DEV_CATEGORIES {
         let mut matched_cmds = Vec::new();
-        for (_pid, process) in sys.processes() {
+        for process in sys.processes().values() {
             // Only orphans (PPID=1)
             let is_orphan = process.parent().map(|p| p.as_u32()) == Some(1);
             if !is_orphan {
@@ -416,7 +421,7 @@ fn write_config(path: &std::path::Path, content: &str) -> Result<()> {
 }
 
 /// Create config file with smart detection or preset
-pub fn init(force: bool, preset: Option<String>) -> Result<()> {
+pub fn init(force: bool, preset: Option<String>, yes: bool) -> Result<()> {
     ensure_config_dir()?;
     let path = config_path()?;
 
@@ -457,12 +462,16 @@ pub fn init(force: bool, preset: Option<String>) -> Result<()> {
     println!("Detected orphaned processes:");
     let mut all_targets: Vec<&str> = Vec::new();
     for (category, patterns, count) in &detected {
-        println!(
-            "  {} {} {} orphan(s)",
-            if *count > 0 { "\x1b[32m✓\x1b[0m" } else { " " },
-            category,
-            count
-        );
+        let check_mark = if *count > 0 {
+            if use_color() {
+                format!("{}", "✓".green())
+            } else {
+                "✓".to_string()
+            }
+        } else {
+            " ".to_string()
+        };
+        println!("  {check_mark} {category} {count} orphan(s)");
         for p in patterns {
             all_targets.push(p);
         }
@@ -470,16 +479,21 @@ pub fn init(force: bool, preset: Option<String>) -> Result<()> {
 
     println!("\nSuggested target patterns:");
     for t in &all_targets {
-        println!("  - \"{}\"", t);
+        println!("  - \"{t}\"");
     }
 
-    // Ask for confirmation
-    println!("\nApply these targets? [Y/n] ");
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    let input = input.trim().to_lowercase();
+    let confirmed = if yes {
+        println!("\nAuto-accepting detected targets (--yes).");
+        true
+    } else {
+        println!("\nApply these targets? [Y/n] ");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        input != "n" && input != "no"
+    };
 
-    if input == "n" || input == "no" {
+    if !confirmed {
         println!("Creating config with empty targets instead.");
         let content = render_template(&[], &[])?;
         write_config(&path, &content)?;
@@ -535,7 +549,7 @@ pub fn edit() -> Result<()> {
     // Validate the edited config
     match Config::load() {
         Ok(_) => println!("Configuration validated successfully."),
-        Err(e) => eprintln!("Warning: Configuration has errors: {}", e),
+        Err(e) => eprintln!("Warning: Configuration has errors: {e}"),
     }
 
     Ok(())
@@ -551,10 +565,47 @@ pub fn show(json: bool) -> Result<()> {
         let content = toml::to_string_pretty(&config)?;
         println!("Current configuration:");
         println!("----------------------");
-        println!("{}", content);
+        println!("{content}");
         println!("----------------------");
         println!("Config file: {}", config_path()?.display());
     }
+
+    Ok(())
+}
+
+/// Show all available environment variable overrides
+pub fn show_env() -> Result<()> {
+    println!("Environment variable overrides for proc-janitor:");
+    println!("================================================\n");
+    println!("These override values from the config file ({}).\n", config_path()?.display());
+
+    let env_vars = [
+        ("PROC_JANITOR_SCAN_INTERVAL", "Scan interval in seconds", "1-3600", "5"),
+        ("PROC_JANITOR_GRACE_PERIOD", "Grace period before killing (seconds)", "0-3600", "30"),
+        ("PROC_JANITOR_SIGTERM_TIMEOUT", "SIGTERM timeout before SIGKILL (seconds)", "1-60", "5"),
+        ("PROC_JANITOR_TARGETS", "Target patterns (comma-separated regexes)", "regex list", "node.*claude,claude,node.*mcp"),
+        ("PROC_JANITOR_WHITELIST", "Whitelist patterns (comma-separated regexes)", "regex list", "node.*server,pm2"),
+        ("PROC_JANITOR_LOG_ENABLED", "Enable file logging", "true/false", "true"),
+        ("PROC_JANITOR_LOG_PATH", "Log file directory path", "path", "~/.proc-janitor/logs"),
+        ("PROC_JANITOR_LOG_RETENTION_DAYS", "Log retention period in days", "0-365", "7"),
+    ];
+
+    for (name, desc, range, default) in &env_vars {
+        let current = std::env::var(name).ok();
+        println!("  {name}");
+        println!("    Description: {desc}");
+        println!("    Valid range:  {range}");
+        println!("    Default:      {default}");
+        if let Some(val) = current {
+            println!("    Current:      {val} (set)");
+        } else {
+            println!("    Current:      (not set)");
+        }
+        println!();
+    }
+
+    println!("Usage: export PROC_JANITOR_SCAN_INTERVAL=10");
+    println!("Priority: CLI flags > env vars > config file > defaults");
 
     Ok(())
 }
@@ -653,7 +704,7 @@ mod tests {
         let mut config = Config::default();
         config.apply_env_overrides();
 
-        assert_eq!(config.logging.enabled, false);
+        assert!(!config.logging.enabled);
         assert_eq!(config.logging.path, "custom/logs");
         assert_eq!(config.logging.retention_days, 14);
 

@@ -14,6 +14,12 @@ categories = ["command-line-utilities", "os"]
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+
+# Terminal UI
+owo-colors = "4"
+supports-color = "3"
+indicatif = "0.17"
 
 # Process management
 sysinfo = "0.31"

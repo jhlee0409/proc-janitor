@@ -11,6 +11,7 @@ pub struct CleanResult {
     pub pid: u32,
     pub name: String,
     pub success: bool,
+    pub error_message: Option<String>,
     #[serde(serialize_with = "serialize_signal")]
     pub signal_used: Signal,
 }
@@ -20,7 +21,7 @@ fn serialize_signal<S>(signal: &Signal, serializer: S) -> Result<S::Ok, S::Error
 where
     S: serde::Serializer,
 {
-    serializer.serialize_str(&format!("{:?}", signal))
+    serializer.serialize_str(&format!("{signal:?}"))
 }
 
 /// Overall clean operation result
@@ -41,16 +42,17 @@ pub fn clean_process(
     dry_run: bool,
 ) -> Result<CleanResult> {
     if dry_run {
-        println!("[DRY-RUN] Would clean process {}", pid);
+        println!("[DRY-RUN] Would clean process {pid}");
         return Ok(CleanResult {
             pid,
             name: String::new(),
             success: true,
+            error_message: None,
             signal_used: Signal::SIGTERM,
         });
     }
 
-    println!("Cleaning process {}...", pid);
+    println!("Cleaning process {pid}...");
     match crate::kill::kill_process(pid, Some(start_time), sigterm_timeout) {
         Ok(signal) => {
             println!("Process {} terminated ({})", pid, if signal == Signal::SIGKILL { "forced" } else { "graceful" });
@@ -58,15 +60,18 @@ pub fn clean_process(
                 pid,
                 name: String::new(),
                 success: true,
+                error_message: None,
                 signal_used: signal,
             })
         }
         Err(e) => {
-            tracing::warn!("Failed to clean PID {}: {}", pid, e);
+            let err_msg = format!("{e}");
+            tracing::warn!("Failed to clean PID {}: {}", pid, err_msg);
             Ok(CleanResult {
                 pid,
                 name: String::new(),
                 success: false,
+                error_message: Some(err_msg),
                 signal_used: Signal::SIGTERM,
             })
         }

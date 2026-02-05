@@ -2,11 +2,12 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(name = "proc-janitor")]
-#[command(about = "Automated process cleanup daemon for macOS/Linux", long_about = None)]
+#[command(about = "Automated orphan process cleanup daemon for macOS/Linux")]
+#[command(long_about = "proc-janitor detects and cleans up orphaned processes (PPID=1) matching\nconfigurable regex patterns. Use 'scan' for safe preview, 'clean' for\nimmediate action, or 'start' to run as a background daemon.\n\nQuick start:\n  proc-janitor scan              Preview orphaned processes (safe)\n  proc-janitor config init       Set up with auto-detection\n  proc-janitor start             Start background daemon\n  proc-janitor doctor            Check system health")]
 #[command(version)]
 pub struct Cli {
     /// Output in JSON format
-    #[arg(long, global = true)]
+    #[arg(long, short = 'j', global = true)]
     pub json: bool,
 
     #[command(subcommand)]
@@ -18,7 +19,7 @@ pub enum Commands {
     /// Start the daemon
     Start {
         /// Run in foreground (don't daemonize)
-        #[arg(long)]
+        #[arg(long, short = 'f')]
         foreground: bool,
     },
 
@@ -28,17 +29,17 @@ pub enum Commands {
     /// Show daemon status
     Status,
 
-    /// Run a single scan (dry-run by default)
+    /// Scan for orphaned processes (safe: dry-run by default, use -e to act)
     Scan {
-        /// Actually perform cleanup actions
-        #[arg(long)]
+        /// Actually execute cleanup (without this flag, scan only previews)
+        #[arg(long, short = 'e')]
         execute: bool,
     },
 
-    /// Clean up processes immediately
+    /// Clean up orphaned processes immediately (use -d to preview first)
     Clean {
-        /// Show what would be cleaned without actually doing it
-        #[arg(long)]
+        /// Preview what would be cleaned without killing any processes
+        #[arg(long, short = 'd')]
         dry_run: bool,
     },
 
@@ -52,7 +53,7 @@ pub enum Commands {
     /// Open interactive dashboard in browser
     Dashboard {
         /// Auto-refresh mode: regenerate dashboard periodically
-        #[arg(long)]
+        #[arg(long, short = 'l')]
         live: bool,
 
         /// Refresh interval in seconds (used with --live, default: 5)
@@ -78,6 +79,16 @@ pub enum Commands {
     /// Session-based process tracking
     #[command(subcommand)]
     Session(SessionCommands),
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for (bash, zsh, fish, powershell)
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
+    /// Diagnose common issues and check system health
+    Doctor,
 }
 
 #[derive(Subcommand, Debug)]
@@ -88,9 +99,20 @@ pub enum ConfigCommands {
         #[arg(long)]
         force: bool,
 
-        /// Use a preset: claude, dev, minimal
+        /// Use a preset configuration:
+        ///   claude   - Target Claude Code & MCP server processes
+        ///   dev      - Target common dev tools (node, cargo, python, bundlers)
+        ///   minimal  - Empty targets for fully manual configuration
         #[arg(long)]
         preset: Option<String>,
+
+        /// List available presets and exit
+        #[arg(long)]
+        list_presets: bool,
+
+        /// Skip confirmation prompts (auto-accept detected targets)
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// Edit configuration file
@@ -98,6 +120,9 @@ pub enum ConfigCommands {
 
     /// Show current configuration
     Show,
+
+    /// Show all environment variable overrides
+    Env,
 }
 
 #[derive(Subcommand, Debug)]
@@ -136,7 +161,7 @@ pub enum SessionCommands {
         session_id: String,
 
         /// Show what would be cleaned without doing it
-        #[arg(long)]
+        #[arg(long, short = 'd')]
         dry_run: bool,
     },
 
@@ -152,7 +177,7 @@ pub enum SessionCommands {
     /// Auto-detect and clean orphaned sessions
     AutoClean {
         /// Show what would be cleaned without doing it
-        #[arg(long)]
+        #[arg(long, short = 'd')]
         dry_run: bool,
     },
 }

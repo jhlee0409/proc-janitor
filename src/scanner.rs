@@ -43,7 +43,7 @@ impl Scanner {
             .iter()
             .map(|p| Regex::new(p))
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("Invalid target regex pattern in configuration: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Invalid target regex pattern in configuration: {e}"))?;
 
         let whitelist_patterns = config
             .whitelist
@@ -51,7 +51,7 @@ impl Scanner {
             .map(|p| Regex::new(p))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| {
-                anyhow::anyhow!("Invalid whitelist regex pattern in configuration: {}", e)
+                anyhow::anyhow!("Invalid whitelist regex pattern in configuration: {e}")
             })?;
 
         Ok(Self {

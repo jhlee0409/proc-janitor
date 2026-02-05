@@ -4,6 +4,7 @@ use crate::scanner::{self, Scanner};
 use anyhow::{bail, Context, Result};
 use daemonize::Daemonize;
 use fs2::FileExt;
+use owo_colors::OwoColorize;
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
@@ -62,7 +63,7 @@ impl Daemon {
     pub fn start(&mut self) -> Result<()> {
         // Initialize logger
         if let Err(e) = logger::init_logger() {
-            eprintln!("Warning: Failed to initialize logger: {}", e);
+            eprintln!("Warning: Failed to initialize logger: {e}");
             // Continue without file logging
         }
 
@@ -94,7 +95,7 @@ impl Daemon {
         // Main loop - reuses self.scanner to preserve tracked state across cycles
         while self.running.load(Ordering::SeqCst) {
             if let Err(e) = scanner::scan_with_scanner(&mut self.scanner, true, sigterm_timeout) {
-                eprintln!("Error scanning processes: {}", e);
+                eprintln!("Error scanning processes: {e}");
             }
 
             // Use interruptible sleep instead of thread::sleep
@@ -204,7 +205,7 @@ pub fn start(foreground: bool) -> Result<()> {
     // Try non-blocking lock - if it fails, another daemon holds it
     if lock_file.try_lock_exclusive().is_err() {
         if let Some(old_pid) = get_daemon_pid() {
-            bail!("Daemon already running with PID {}", old_pid);
+            bail!("Daemon already running with PID {old_pid}");
         }
         bail!("Another daemon instance is starting");
     }
@@ -220,7 +221,7 @@ pub fn start(foreground: bool) -> Result<()> {
             // Process exists and we have the lock - this shouldn't happen
             // but if it does, the other process doesn't hold the lock
             let _ = lock_file.unlock();
-            bail!("Daemon already running with PID {}", old_pid);
+            bail!("Daemon already running with PID {old_pid}");
         }
         tracing::info!("Removing stale PID file from previous crash...");
     }
@@ -277,9 +278,9 @@ pub fn stop() -> Result<()> {
 
         let nix_pid = NixPid::from_raw(i32::try_from(pid).context("PID exceeds i32 range")?);
         kill(nix_pid, Signal::SIGTERM)
-            .with_context(|| format!("Failed to send SIGTERM to daemon (PID: {})", pid))?;
+            .with_context(|| format!("Failed to send SIGTERM to daemon (PID: {pid})"))?;
 
-        println!("Sent SIGTERM to daemon (PID: {})", pid);
+        println!("Sent SIGTERM to daemon (PID: {pid})");
 
         // Poll for process termination
         let max_wait = DAEMON_STOP_MAX_POLLS;
@@ -294,7 +295,7 @@ pub fn stop() -> Result<()> {
         }
 
         if terminated {
-            println!("Daemon stopped successfully (PID: {})", pid);
+            println!("Daemon stopped successfully (PID: {pid})");
         } else {
             println!(
                 "Warning: Daemon (PID: {}) did not terminate within {} seconds",
@@ -311,6 +312,70 @@ pub fn stop() -> Result<()> {
     }
 }
 
+/// Get daemon uptime as a human-readable string
+fn get_daemon_uptime(pid: u32) -> Option<String> {
+    use sysinfo::{ProcessRefreshKind, RefreshKind, System};
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+    );
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+
+    let process = sys.process(sysinfo::Pid::from_u32(pid))?;
+    let start_time = process.start_time();
+    if start_time == 0 {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let uptime_secs = now.saturating_sub(start_time);
+
+    let hours = uptime_secs / 3600;
+    let minutes = (uptime_secs % 3600) / 60;
+    let seconds = uptime_secs % 60;
+
+    if hours > 0 {
+        Some(format!("{hours}h {minutes}m"))
+    } else if minutes > 0 {
+        Some(format!("{minutes}m {seconds}s"))
+    } else {
+        Some(format!("{seconds}s"))
+    }
+}
+
+/// Print recent log entries
+fn print_recent_logs(count: usize) {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return,
+    };
+    let log_dir = home.join(".proc-janitor").join("logs");
+    if !log_dir.exists() {
+        return;
+    }
+
+    // Find the most recent log file
+    let mut entries: Vec<_> = match std::fs::read_dir(&log_dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+        Err(_) => return,
+    };
+    entries.sort_by_key(|e| std::cmp::Reverse(e.path()));
+
+    if let Some(entry) = entries.first() {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(count);
+            if !lines[start..].is_empty() {
+                println!("\n  Recent logs:");
+                for line in &lines[start..] {
+                    println!("    {line}");
+                }
+            }
+        }
+    }
+}
+
 /// Show daemon status (called from CLI)
 pub fn status(json: bool) -> Result<()> {
     let running = is_daemon_running();
@@ -324,18 +389,51 @@ pub fn status(json: bool) -> Result<()> {
             stale_pid_file,
         };
         println!("{}", serde_json::to_string_pretty(&status)?);
-    } else if running {
-        if let Some(pid) = pid {
-            println!("Daemon is running (PID: {})", pid);
-        } else {
-            println!("Daemon is running (PID unknown)");
-        }
     } else {
-        println!("Daemon is not running");
+        let use_color = std::env::var("NO_COLOR").is_err()
+            && supports_color::on(supports_color::Stream::Stdout).is_some();
 
-        // Check for stale PID file
-        if stale_pid_file {
-            println!("(Stale PID file found, daemon might have crashed)");
+        if running {
+            if use_color {
+                println!("{} proc-janitor daemon ({})", "●".green(), "running".green());
+            } else {
+                println!("● proc-janitor daemon (running)");
+            }
+            if let Some(pid) = pid {
+                // Try to get process uptime
+                let uptime_str = get_daemon_uptime(pid).unwrap_or_default();
+                if uptime_str.is_empty() {
+                    println!("  PID: {pid}");
+                } else {
+                    println!("  PID: {pid} | Uptime: {uptime_str}");
+                }
+            }
+
+            // Show config summary
+            if let Ok(config) = crate::config::Config::load() {
+                println!("  Patterns: {} target(s), {} whitelisted", config.targets.len(), config.whitelist.len());
+                println!("  Scan interval: {}s | Grace period: {}s", config.scan_interval, config.grace_period);
+            }
+
+            // Show last few log lines
+            print_recent_logs(3);
+        } else {
+            if use_color {
+                println!("{} proc-janitor daemon ({})", "●".dimmed(), "stopped".dimmed());
+            } else {
+                println!("● proc-janitor daemon (stopped)");
+            }
+            if stale_pid_file {
+                if use_color {
+                    println!("  {}", "Stale PID file found - daemon may have crashed".yellow());
+                    println!("  Fix: Run 'proc-janitor stop' to clean up, then 'proc-janitor start'");
+                } else {
+                    println!("  Stale PID file found - daemon may have crashed");
+                    println!("  Fix: Run 'proc-janitor stop' to clean up, then 'proc-janitor start'");
+                }
+            } else {
+                println!("  Start with: proc-janitor start");
+            }
         }
     }
     Ok(())

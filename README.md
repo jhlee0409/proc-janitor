@@ -62,11 +62,17 @@ This builds the binary, installs it, creates a default config, and sets up a mac
 # Create a config file with explanations
 proc-janitor config init
 
-# See what's lurking
+# Detect orphaned processes (safe, no killing)
 proc-janitor scan
 
-# Clean orphans immediately
+# Kill all detected orphans
 proc-janitor clean
+
+# Kill only specific PIDs
+proc-janitor clean --pid 12345 67890
+
+# Kill only orphans matching a pattern
+proc-janitor clean --pattern "node.*mcp"
 
 # Start the daemon (runs in background)
 proc-janitor start
@@ -156,8 +162,8 @@ Every config option can be overridden via environment variables. Values outside 
 | `start [-f\|--foreground]` | Start the daemon |
 | `stop` | Stop the daemon |
 | `status` | Show daemon status (systemctl-style with uptime) |
-| `scan [-e\|--execute]` | Scan for orphans (dry-run by default) |
-| `clean [-d\|--dry-run]` | Kill orphaned target processes |
+| `scan` | Detect orphaned processes (safe, no killing) |
+| `clean [--pid PIDs] [--pattern REGEX]` | Kill orphaned target processes (all by default, or filter by PID/pattern) |
 | `tree [-t\|--targets-only]` | Visualize process tree |
 | `logs [-f\|--follow] [-n N]` | View logs (N: 1–10000, default 50) |
 | `doctor` | Diagnose common issues and check system health |
@@ -209,7 +215,7 @@ launchctl unload ~/Library/LaunchAgents/com.proc-janitor.plist
 - **Daemon identity verification** — `stop` confirms the PID file points to an actual proc-janitor process before sending signals
 - **Symlink protection** — refuses to write to symlinks at predictable paths (`~/.proc-janitor/`), preventing local symlink attacks
 - **TOCTOU-safe session store** — exclusive file lock held across full read-modify-write cycle
-- **Dry-run mode** — preview cleanup without executing
+- **Scan before clean** — `scan` is always safe (detection only), `clean` is always destructive (with optional filters)
 - **Atomic file operations** — config and session data use file locking with fsync for crash safety
 - **Directory permissions** — `~/.proc-janitor/` created with `0o700` (owner-only access)
 - **Audit logging** — every action is logged with timestamps

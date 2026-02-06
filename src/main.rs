@@ -58,6 +58,19 @@ fn run() -> Result<()> {
                 } else {
                     println!("No orphaned processes found.");
                 }
+                if !result.targets_configured {
+                    if use_color() {
+                        println!(
+                            "\n{}",
+                            "No target patterns configured. Run 'proc-janitor config init' to set up targets."
+                                .yellow()
+                        );
+                    } else {
+                        println!(
+                            "\nNo target patterns configured. Run 'proc-janitor config init' to set up targets."
+                        );
+                    }
+                }
             } else {
                 println!("Found {} orphaned process(es):", result.orphan_count);
                 for orphan in &result.orphans {
@@ -87,6 +100,19 @@ fn run() -> Result<()> {
                     println!("{}", "No orphaned processes found to clean.".green());
                 } else {
                     println!("No orphaned processes found to clean.");
+                }
+                if pid.is_empty() && pattern.is_none() && !result.targets_configured {
+                    if use_color() {
+                        println!(
+                            "\n{}",
+                            "No target patterns configured. Run 'proc-janitor config init' to set up targets."
+                                .yellow()
+                        );
+                    } else {
+                        println!(
+                            "\nNo target patterns configured. Run 'proc-janitor config init' to set up targets."
+                        );
+                    }
                 }
             } else {
                 if result.failed == 0 && use_color() {

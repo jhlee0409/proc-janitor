@@ -44,6 +44,7 @@ pub struct OrphanProcess {
 pub struct ScanResult {
     pub orphans: Vec<OrphanProcess>,
     pub orphan_count: usize,
+    pub targets_configured: bool,
 }
 
 /// Scanner tracks and identifies orphaned processes
@@ -248,12 +249,14 @@ pub fn scan() -> Result<ScanResult> {
 /// This is used by the daemon to maintain grace_period tracking between scan cycles.
 /// Detection only — does not kill any processes.
 pub fn scan_with_scanner(scanner: &mut Scanner) -> Result<ScanResult> {
+    let targets_configured = !scanner.target_patterns.is_empty();
     let orphans = scanner.scan()?;
     let orphan_count = orphans.len();
 
     Ok(ScanResult {
         orphans,
         orphan_count,
+        targets_configured,
     })
 }
 

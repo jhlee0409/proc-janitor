@@ -34,6 +34,7 @@ pub struct CleanSummary {
     pub successful: usize,
     pub failed: usize,
     pub results: Vec<CleanResult>,
+    pub targets_configured: bool,
 }
 
 /// Clean a single process by PID using a shared System instance (for batch operations)
@@ -144,6 +145,7 @@ pub fn clean_all(
 pub fn clean_filtered(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummary> {
     let mut config = Config::load()?;
     let sigterm_timeout = config.sigterm_timeout;
+    let targets_configured = !config.targets.is_empty();
     // CLI clean should execute immediately without grace period
     config.grace_period = 0;
     let mut scanner = crate::scanner::Scanner::new(config)?;
@@ -198,6 +200,7 @@ pub fn clean_filtered(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummar
         successful,
         failed,
         results,
+        targets_configured,
     })
 }
 

@@ -159,7 +159,6 @@ Every config option can be overridden via environment variables. Values outside 
 | `scan [-e\|--execute]` | Scan for orphans (dry-run by default) |
 | `clean [-d\|--dry-run]` | Kill orphaned target processes |
 | `tree [-t\|--targets-only]` | Visualize process tree |
-| `dashboard [-l\|--live] [--interval N]` | Open browser-based dashboard (live mode auto-refreshes every N seconds, default 5) |
 | `logs [-f\|--follow] [-n N]` | View logs (N: 1–10000, default 50) |
 | `doctor` | Diagnose common issues and check system health |
 | `completions <shell>` | Generate shell completions (`bash`, `zsh`, `fish`, `powershell`) |

@@ -23,6 +23,18 @@ pub struct DaemonStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub stale_pid_file: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uptime_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uptime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_interval: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grace_period: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub whitelist_count: Option<usize>,
 }
 
 pub struct Daemon {
@@ -367,8 +379,8 @@ pub fn stop() -> Result<()> {
     }
 }
 
-/// Get daemon uptime as a human-readable string
-fn get_daemon_uptime(pid: u32) -> Option<String> {
+/// Get daemon uptime as (raw_seconds, human-readable string)
+fn get_daemon_uptime(pid: u32) -> Option<(u64, String)> {
     use sysinfo::{ProcessRefreshKind, RefreshKind, System};
     let mut sys =
         System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
@@ -391,13 +403,14 @@ fn get_daemon_uptime(pid: u32) -> Option<String> {
     let minutes = (uptime_secs % 3600) / 60;
     let seconds = uptime_secs % 60;
 
-    if hours > 0 {
-        Some(format!("{hours}h {minutes}m"))
+    let display = if hours > 0 {
+        format!("{hours}h {minutes}m")
     } else if minutes > 0 {
-        Some(format!("{minutes}m {seconds}s"))
+        format!("{minutes}m {seconds}s")
     } else {
-        Some(format!("{seconds}s"))
-    }
+        format!("{seconds}s")
+    };
+    Some((uptime_secs, display))
 }
 
 /// Print recent log entries
@@ -450,11 +463,31 @@ pub fn status(json: bool) -> Result<()> {
     let pid = get_daemon_pid();
     let stale_pid_file = !running && pid.is_some();
 
+    // Gather uptime info if running
+    let uptime_info = if running {
+        pid.and_then(get_daemon_uptime)
+    } else {
+        None
+    };
+
+    // Gather config info if running
+    let config_info = if running {
+        crate::config::Config::load().ok()
+    } else {
+        None
+    };
+
     if json {
         let status = DaemonStatus {
             running,
             pid,
             stale_pid_file,
+            uptime_seconds: uptime_info.as_ref().map(|(secs, _)| *secs),
+            uptime: uptime_info.as_ref().map(|(_, display)| display.clone()),
+            scan_interval: config_info.as_ref().map(|c| c.scan_interval),
+            grace_period: config_info.as_ref().map(|c| c.grace_period),
+            target_count: config_info.as_ref().map(|c| c.targets.len()),
+            whitelist_count: config_info.as_ref().map(|c| c.whitelist.len()),
         };
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
@@ -471,17 +504,15 @@ pub fn status(json: bool) -> Result<()> {
                 println!("● proc-janitor daemon (running)");
             }
             if let Some(pid) = pid {
-                // Try to get process uptime
-                let uptime_str = get_daemon_uptime(pid).unwrap_or_default();
-                if uptime_str.is_empty() {
-                    println!("  PID: {pid}");
+                if let Some((_, ref display)) = uptime_info {
+                    println!("  PID: {pid} | Uptime: {display}");
                 } else {
-                    println!("  PID: {pid} | Uptime: {uptime_str}");
+                    println!("  PID: {pid}");
                 }
             }
 
             // Show config summary
-            if let Ok(config) = crate::config::Config::load() {
+            if let Some(ref config) = config_info {
                 println!(
                     "  Patterns: {} target(s), {} whitelisted",
                     config.targets.len(),
@@ -538,11 +569,20 @@ mod tests {
             running: true,
             pid: Some(1234),
             stale_pid_file: false,
+            uptime_seconds: Some(3661),
+            uptime: Some("1h 1m".to_string()),
+            scan_interval: Some(5),
+            grace_period: Some(30),
+            target_count: Some(3),
+            whitelist_count: Some(1),
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"running\":true"));
         assert!(json.contains("\"pid\":1234"));
         assert!(json.contains("\"stale_pid_file\":false"));
+        assert!(json.contains("\"uptime_seconds\":3661"));
+        assert!(json.contains("\"scan_interval\":5"));
+        assert!(json.contains("\"target_count\":3"));
     }
 
     #[test]
@@ -551,11 +591,20 @@ mod tests {
             running: false,
             pid: None,
             stale_pid_file: true,
+            uptime_seconds: None,
+            uptime: None,
+            scan_interval: None,
+            grace_period: None,
+            target_count: None,
+            whitelist_count: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"running\":false"));
         assert!(json.contains("\"pid\":null"));
         assert!(json.contains("\"stale_pid_file\":true"));
+        // Optional fields should be absent when None (skip_serializing_if)
+        assert!(!json.contains("uptime_seconds"));
+        assert!(!json.contains("scan_interval"));
     }
 
     #[test]

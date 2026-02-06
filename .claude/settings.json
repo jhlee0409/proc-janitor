@@ -1,13 +1,13 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "hooks": {
-    "PreCommit": [
+    "PreToolUse": [
       {
-        "matcher": "",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "cargo test --quiet 2>&1 | tail -5 && cargo clippy --quiet -- -D warnings 2>&1 | tail -10"
+            "command": "if echo \"$TOOL_INPUT\" | grep -q 'git commit'; then cargo test --quiet 2>&1 | tail -5 && cargo clippy --quiet -- -D warnings 2>&1 | tail -10; fi"
           }
         ]
       }

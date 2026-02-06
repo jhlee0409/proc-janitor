@@ -52,17 +52,6 @@ pub enum Commands {
         targets_only: bool,
     },
 
-    /// Open interactive dashboard in browser
-    Dashboard {
-        /// Auto-refresh mode: regenerate dashboard periodically
-        #[arg(long, short = 'l')]
-        live: bool,
-
-        /// Refresh interval in seconds (used with --live, default: 5)
-        #[arg(long, default_value = "5", value_parser = clap::value_parser!(u64).range(1..=3600))]
-        interval: u64,
-    },
-
     /// Configuration management
     #[command(subcommand)]
     Config(ConfigCommands),

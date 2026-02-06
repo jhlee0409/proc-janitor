@@ -112,15 +112,11 @@ fn run() -> Result<()> {
                             } else {
                                 println!(
                                     "  {}",
-                                    format!("Failed to clean PID {} ({})", res.pid, res.name)
-                                        .red()
+                                    format!("Failed to clean PID {} ({})", res.pid, res.name).red()
                                 );
                             }
                         } else if let Some(ref err) = res.error_message {
-                            println!(
-                                "  Failed to clean PID {} ({}): {}",
-                                res.pid, res.name, err
-                            );
+                            println!("  Failed to clean PID {} ({}): {}", res.pid, res.name, err);
                         } else {
                             println!("  Failed to clean PID {} ({})", res.pid, res.name);
                         }

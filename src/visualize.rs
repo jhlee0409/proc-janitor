@@ -198,7 +198,7 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
             print!(
                 "  {}  {} {}",
                 "│".dimmed(),
-                format!("{:.0}MB", total_reclaimable).red(),
+                format!("{total_reclaimable:.0}MB").red(),
                 "reclaimable".dimmed()
             );
         }

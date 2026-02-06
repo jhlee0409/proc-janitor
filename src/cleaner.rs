@@ -1,5 +1,8 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use nix::sys::signal::Signal;
+use regex::Regex;
 use serde::Serialize;
 
 use crate::config::Config;
@@ -31,7 +34,6 @@ pub struct CleanSummary {
     pub successful: usize,
     pub failed: usize,
     pub results: Vec<CleanResult>,
-    pub dry_run: bool,
 }
 
 /// Clean a single process by PID using a shared System instance (for batch operations)
@@ -133,8 +135,13 @@ pub fn clean_all(
     Ok(results)
 }
 
-/// Public function for CLI clean command
-pub fn clean(dry_run: bool) -> Result<CleanSummary> {
+/// Clean orphaned processes with optional PID and pattern filters.
+///
+/// - If `pids` is non-empty: only kill orphans whose PID is in the list.
+/// - If `pattern` is provided: only kill orphans whose cmdline matches the regex.
+/// - If both: intersection (PID must be in list AND cmdline must match).
+/// - If neither: kill all detected orphans.
+pub fn clean_filtered(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummary> {
     let mut config = Config::load()?;
     let sigterm_timeout = config.sigterm_timeout;
     // CLI clean should execute immediately without grace period
@@ -142,11 +149,46 @@ pub fn clean(dry_run: bool) -> Result<CleanSummary> {
     let mut scanner = crate::scanner::Scanner::new(config)?;
     let orphans = scanner.scan()?;
 
-    let results = if !orphans.is_empty() {
-        clean_all(&orphans, sigterm_timeout, dry_run)?
+    if let Some(p) = pattern {
+        if p.len() > 1024 {
+            anyhow::bail!("Filter pattern too long (max 1024 characters)");
+        }
+    }
+    let pattern_re = pattern
+        .map(Regex::new)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("Invalid filter pattern: {e}"))?;
+
+    let pid_set: HashSet<u32> = pids.iter().copied().collect();
+    let filtered: Vec<&OrphanProcess> = orphans
+        .iter()
+        .filter(|o| {
+            let pid_ok = pid_set.is_empty() || pid_set.contains(&o.pid);
+            #[allow(clippy::unnecessary_map_or)]
+            let pattern_ok = pattern_re
+                .as_ref()
+                .map_or(true, |re| re.is_match(&o.cmdline));
+            pid_ok && pattern_ok
+        })
+        .collect();
+
+    // Collect owned copies for clean_all (which expects &[OrphanProcess])
+    let to_clean: Vec<OrphanProcess> = filtered.into_iter().cloned().collect();
+
+    let results = if !to_clean.is_empty() {
+        clean_all(&to_clean, sigterm_timeout, false)?
     } else {
         Vec::new()
     };
+
+    // Warn when filters were specified but nothing matched
+    let has_filters = !pids.is_empty() || pattern.is_some();
+    if has_filters && to_clean.is_empty() && !orphans.is_empty() {
+        eprintln!(
+            "Warning: Found {} orphan(s) but none matched your filters.",
+            orphans.len()
+        );
+    }
 
     let successful = results.iter().filter(|r| r.success).count();
     let failed = results.len() - successful;
@@ -156,7 +198,6 @@ pub fn clean(dry_run: bool) -> Result<CleanSummary> {
         successful,
         failed,
         results,
-        dry_run,
     })
 }
 

@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(name = "proc-janitor")]
 #[command(about = "Automated orphan process cleanup daemon for macOS/Linux")]
 #[command(
-    long_about = "proc-janitor detects and cleans up orphaned processes (PPID=1) matching\nconfigurable regex patterns. Use 'scan' for safe preview, 'clean' for\nimmediate action, or 'start' to run as a background daemon.\n\nQuick start:\n  proc-janitor scan              Preview orphaned processes (safe)\n  proc-janitor config init       Set up with auto-detection\n  proc-janitor start             Start background daemon\n  proc-janitor doctor            Check system health"
+    long_about = "proc-janitor detects and cleans up orphaned processes (PPID=1) matching\nconfigurable regex patterns. Use 'scan' to detect, 'clean' to kill,\nor 'start' to run as a background daemon.\n\nQuick start:\n  proc-janitor scan              Detect orphaned processes (safe, no killing)\n  proc-janitor clean             Kill all detected orphans\n  proc-janitor clean --pid 123   Kill specific orphan by PID\n  proc-janitor clean -m 'node'   Kill orphans matching pattern\n  proc-janitor config init       Set up with auto-detection\n  proc-janitor start             Start background daemon"
 )]
 #[command(version)]
 pub struct Cli {
@@ -31,18 +31,18 @@ pub enum Commands {
     /// Show daemon status
     Status,
 
-    /// Scan for orphaned processes (safe: dry-run by default, use -e to act)
-    Scan {
-        /// Actually execute cleanup (without this flag, scan only previews)
-        #[arg(long, short = 'e')]
-        execute: bool,
-    },
+    /// Scan for orphaned processes (detection only, no killing)
+    Scan,
 
-    /// Clean up orphaned processes immediately (use -d to preview first)
+    /// Clean up orphaned processes (kills all by default, use filters to be selective)
     Clean {
-        /// Preview what would be cleaned without killing any processes
-        #[arg(long, short = 'd')]
-        dry_run: bool,
+        /// Kill only specific PIDs (space-separated)
+        #[arg(long, short = 'p', num_args = 1..)]
+        pid: Vec<u32>,
+
+        /// Kill only orphans whose command line matches this regex pattern
+        #[arg(long, short = 'm')]
+        pattern: Option<String>,
     },
 
     /// Show process tree visualization

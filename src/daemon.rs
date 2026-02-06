@@ -97,8 +97,18 @@ impl Daemon {
 
         // Main loop - reuses self.scanner to preserve tracked state across cycles
         while self.running.load(Ordering::SeqCst) {
-            if let Err(e) = scanner::scan_with_scanner(&mut self.scanner, true, sigterm_timeout) {
-                eprintln!("Error scanning processes: {e}");
+            match scanner::scan_with_scanner(&mut self.scanner) {
+                Ok(result) if !result.orphans.is_empty() => {
+                    if let Err(e) =
+                        crate::cleaner::clean_all(&result.orphans, sigterm_timeout, false)
+                    {
+                        eprintln!("Error cleaning processes: {e}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error scanning processes: {e}");
+                }
+                _ => {}
             }
 
             // Use interruptible sleep instead of thread::sleep
@@ -257,9 +267,8 @@ pub fn start(foreground: bool) -> Result<()> {
         Ok(c) => c,
         Err(e) => {
             eprintln!(
-                "Warning: Failed to load config ({}). Using defaults. \
-                 Fix with: proc-janitor config init --force",
-                e
+                "Warning: Failed to load config ({e}). Using defaults. \
+                 Fix with: proc-janitor config init --force"
             );
             Config::default()
         }

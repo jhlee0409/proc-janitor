@@ -384,12 +384,21 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
     let root_pids: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
     let pids_to_clean = find_descendant_pids(&sys, &root_pids);
 
-    // Build a map from pid -> start_time from tracked pids for kill verification
-    let start_time_map: HashMap<u32, Option<u64>> = session
-        .pids
-        .iter()
-        .map(|tp| (tp.pid, tp.start_time))
-        .collect();
+    // Build start_time map: capture live start_times for ALL PIDs (including descendants),
+    // then override with stored start_times for tracked root PIDs (more authoritative).
+    // This ensures descendant kills also get PID reuse protection.
+    let mut start_time_map: HashMap<u32, Option<u64>> = HashMap::new();
+    for pid in &pids_to_clean {
+        let st = sys
+            .process(sysinfo::Pid::from_u32(*pid))
+            .map(|p| p.start_time());
+        start_time_map.insert(*pid, st);
+    }
+    for tp in &session.pids {
+        if tp.start_time.is_some() {
+            start_time_map.insert(tp.pid, tp.start_time);
+        }
+    }
 
     if pids_to_clean.is_empty() {
         println!("No processes to clean.");
@@ -522,16 +531,24 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
             );
 
             if !dry_run {
-                // Build start_time map from tracked pids
-                let start_time_map: HashMap<u32, Option<u64>> = session
-                    .pids
-                    .iter()
-                    .map(|tp| (tp.pid, tp.start_time))
-                    .collect();
-
                 // Kill descendant processes
                 let root_pids: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
                 let pids_to_clean = find_descendant_pids(&sys, &root_pids);
+
+                // Build start_time map: live start_times for all PIDs, then override
+                // with stored start_times for tracked root PIDs (PID reuse protection for descendants)
+                let mut start_time_map: HashMap<u32, Option<u64>> = HashMap::new();
+                for pid in &pids_to_clean {
+                    let st = sys
+                        .process(sysinfo::Pid::from_u32(*pid))
+                        .map(|p| p.start_time());
+                    start_time_map.insert(*pid, st);
+                }
+                for tp in &session.pids {
+                    if tp.start_time.is_some() {
+                        start_time_map.insert(tp.pid, tp.start_time);
+                    }
+                }
                 let mut killed = 0;
                 let mut failed = 0;
                 for pid in &pids_to_clean {

@@ -34,7 +34,7 @@ fn run() -> Result<()> {
             daemon::status(cli.json)?;
         }
 
-        Commands::Scan { execute } => {
+        Commands::Scan => {
             let spinner = if !cli.json {
                 let sp = indicatif::ProgressBar::new_spinner();
                 sp.set_message("Scanning for orphaned processes...");
@@ -44,7 +44,7 @@ fn run() -> Result<()> {
                 None
             };
 
-            let result = scanner::scan(execute)?;
+            let result = scanner::scan()?;
 
             if let Some(sp) = spinner {
                 sp.finish_and_clear();
@@ -66,22 +66,19 @@ fn run() -> Result<()> {
                         orphan.pid, orphan.name, orphan.cmdline
                     );
                 }
-
-                if execute {
-                    println!("\nCleaned up {} process(es).", result.cleaned_count);
-                } else if use_color() {
+                if use_color() {
                     println!(
                         "\n{}",
-                        "Dry-run mode. Use --execute to clean up these processes.".yellow()
+                        "Use 'proc-janitor clean' to kill these processes.".yellow()
                     );
                 } else {
-                    println!("\nDry-run mode. Use --execute to clean up these processes.");
+                    println!("\nUse 'proc-janitor clean' to kill these processes.");
                 }
             }
         }
 
-        Commands::Clean { dry_run } => {
-            let result = cleaner::clean(dry_run)?;
+        Commands::Clean { pid, pattern } => {
+            let result = cleaner::clean_filtered(&pid, pattern.as_deref())?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -92,56 +89,40 @@ fn run() -> Result<()> {
                     println!("No orphaned processes found to clean.");
                 }
             } else {
-                println!("Found {} orphaned process(es) to clean:", result.total);
-                for res in &result.results {
-                    println!("  PID {} - {}", res.pid, res.name);
-                }
-
-                if dry_run {
-                    if use_color() {
-                        println!(
-                            "\n{}",
-                            "Dry-run mode. No processes were terminated.".yellow()
-                        );
-                    } else {
-                        println!("\nDry-run mode. No processes were terminated.");
-                    }
+                if result.failed == 0 && use_color() {
+                    println!("\n{}", "Cleanup complete:".green());
                 } else {
-                    if result.failed == 0 && use_color() {
-                        println!("\n{}", "Cleanup complete:".green());
-                    } else {
-                        println!("\nCleanup complete:");
-                    }
-                    println!("  Successful: {}", result.successful);
-                    println!("  Failed: {}", result.failed);
+                    println!("\nCleanup complete:");
+                }
+                println!("  Successful: {}", result.successful);
+                println!("  Failed: {}", result.failed);
 
-                    for res in &result.results {
-                        if !res.success {
-                            if use_color() {
-                                if let Some(ref err) = res.error_message {
-                                    println!(
-                                        "  {}",
-                                        format!(
-                                            "Failed to clean PID {} ({}): {}",
-                                            res.pid, res.name, err
-                                        )
-                                        .red()
-                                    );
-                                } else {
-                                    println!(
-                                        "  {}",
-                                        format!("Failed to clean PID {} ({})", res.pid, res.name)
-                                            .red()
-                                    );
-                                }
-                            } else if let Some(ref err) = res.error_message {
+                for res in &result.results {
+                    if !res.success {
+                        if use_color() {
+                            if let Some(ref err) = res.error_message {
                                 println!(
-                                    "  Failed to clean PID {} ({}): {}",
-                                    res.pid, res.name, err
+                                    "  {}",
+                                    format!(
+                                        "Failed to clean PID {} ({}): {}",
+                                        res.pid, res.name, err
+                                    )
+                                    .red()
                                 );
                             } else {
-                                println!("  Failed to clean PID {} ({})", res.pid, res.name);
+                                println!(
+                                    "  {}",
+                                    format!("Failed to clean PID {} ({})", res.pid, res.name)
+                                        .red()
+                                );
                             }
+                        } else if let Some(ref err) = res.error_message {
+                            println!(
+                                "  Failed to clean PID {} ({}): {}",
+                                res.pid, res.name, err
+                            );
+                        } else {
+                            println!("  Failed to clean PID {} ({})", res.pid, res.name);
                         }
                     }
                 }

@@ -39,13 +39,11 @@ pub struct OrphanProcess {
     pub start_time: u64, // Process start time for identity verification
 }
 
-/// Result of a scan operation
+/// Result of a scan operation (detection only, no killing)
 #[derive(Debug, Serialize)]
 pub struct ScanResult {
     pub orphans: Vec<OrphanProcess>,
     pub orphan_count: usize,
-    pub cleaned_count: usize,
-    pub executed: bool,
 }
 
 /// Scanner tracks and identifies orphaned processes
@@ -235,40 +233,27 @@ fn is_orphan(process: &sysinfo::Process) -> bool {
     process.parent().map(|p| p.as_u32()) == Some(1)
 }
 
-/// Public function for CLI scan command (creates a fresh Scanner each call)
-pub fn scan(execute: bool) -> Result<ScanResult> {
+/// Public function for CLI scan command (creates a fresh Scanner each call).
+/// Detection only — does not kill any processes.
+pub fn scan() -> Result<ScanResult> {
     let mut config = Config::load()?;
-    let sigterm_timeout = config.sigterm_timeout;
     // CLI scan should show results immediately without grace period.
     // Grace period is only meaningful for the daemon which persists Scanner state.
     config.grace_period = 0;
     let mut scanner = Scanner::new(config)?;
-    scan_with_scanner(&mut scanner, execute, sigterm_timeout)
+    scan_with_scanner(&mut scanner)
 }
 
 /// Scan using an existing Scanner instance, preserving tracked state across calls.
 /// This is used by the daemon to maintain grace_period tracking between scan cycles.
-pub fn scan_with_scanner(
-    scanner: &mut Scanner,
-    execute: bool,
-    sigterm_timeout: u64,
-) -> Result<ScanResult> {
+/// Detection only — does not kill any processes.
+pub fn scan_with_scanner(scanner: &mut Scanner) -> Result<ScanResult> {
     let orphans = scanner.scan()?;
-
     let orphan_count = orphans.len();
-
-    let cleaned_count = if execute && !orphans.is_empty() {
-        let results = crate::cleaner::clean_all(&orphans, sigterm_timeout, false)?;
-        results.iter().filter(|r| r.success).count()
-    } else {
-        0
-    };
 
     Ok(ScanResult {
         orphans,
         orphan_count,
-        cleaned_count,
-        executed: execute,
     })
 }
 

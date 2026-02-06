@@ -126,3 +126,33 @@ fn test_tree_command() {
 
     assert!(output.status.success());
 }
+
+#[test]
+fn test_clean_command() {
+    let output = Command::new(binary_path())
+        .arg("clean")
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_clean_with_pid_filter() {
+    let output = Command::new(binary_path())
+        .args(["clean", "--pid", "99999"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_clean_with_pattern_filter() {
+    let output = Command::new(binary_path())
+        .args(["clean", "--pattern", "nonexistent_process_xyz"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+}

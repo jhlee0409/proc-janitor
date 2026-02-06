@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-02-06
+
+### Breaking Changes
+- `scan --execute` flag removed — `scan` is now detection-only (never kills)
+- `clean --dry-run` flag removed — use `scan` to preview, `clean` to execute
+- JSON schema for `scan`: removed `cleaned_count` and `executed` fields
+- JSON schema for `clean`: removed `dry_run` field
+
+### Added
+- `clean --pid` (`-p`) filter to kill only specific orphan PIDs
+- `clean --pattern` (`-m`) filter to kill only orphans matching a regex pattern
+- Filter intersection: when both `--pid` and `--pattern` are provided, only orphans matching both are killed
+- Warning message when filters are specified but no orphans match
+- 3 new integration tests for clean command variants (70 total: 60 unit + 10 integration)
+- Hierarchical AGENTS.md documentation across all directories
+
+### Changed
+- `scan` and `clean` are now fully separated: scan detects, clean executes
+- Daemon loop explicitly calls scan then clean as separate phases
+- PID filter uses HashSet for O(1) lookup instead of linear Vec search
+- `--pattern` input validated with 1024-character length limit (matches config pattern bounds)
+- MSRV-compatible: uses `map_or` instead of `is_none_or` (Rust 1.70+ safe)
+
+### Fixed
+- Process tree box alignment and formatting
+- Status command JSON output enriched with daemon metadata
+- Session validation hardened for orphan tree detection
+- 2 pre-existing clippy `uninlined_format_args` warnings in daemon.rs and visualize.rs
+
 ## [0.3.0] - 2026-02-06
 
 ### Added

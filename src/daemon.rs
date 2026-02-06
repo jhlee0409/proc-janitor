@@ -219,6 +219,12 @@ fn record_cleanup_stats(results: &[crate::cleaner::CleanResult]) {
         None => return,
     };
 
+    // Symlink protection: refuse to write through symlinks
+    if let Err(e) = crate::util::check_not_symlink(&stats_path) {
+        tracing::warn!("Refusing to write stats: {e}");
+        return;
+    }
+
     // Append one JSON line
     if let Ok(mut file) = OpenOptions::new()
         .create(true)

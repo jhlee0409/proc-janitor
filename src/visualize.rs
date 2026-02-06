@@ -132,6 +132,21 @@ fn matches_patterns(text: &str, patterns: &[Regex]) -> bool {
     patterns.iter().any(|re| re.is_match(text))
 }
 
+/// Recursively collect all descendant PIDs of a given process
+fn collect_orphan_tree(
+    pid: u32,
+    children: &HashMap<u32, Vec<u32>>,
+    result: &mut HashSet<u32>,
+) {
+    if let Some(child_pids) = children.get(&pid) {
+        for &child in child_pids {
+            if result.insert(child) {
+                collect_orphan_tree(child, children, result);
+            }
+        }
+    }
+}
+
 // ============================================================================
 // ASCII Tree View
 // ============================================================================
@@ -158,7 +173,19 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
         .values()
         .filter(|n| n.is_target && !n.is_whitelisted)
         .collect();
-    let orphan_targets: Vec<_> = targets.iter().filter(|n| n.is_orphan).collect();
+
+    // Expand orphan roots to include all their descendant targets (cleanable)
+    let mut orphan_tree_pids = HashSet::new();
+    for node in targets.iter() {
+        if node.is_orphan {
+            orphan_tree_pids.insert(node.pid);
+            collect_orphan_tree(node.pid, &children, &mut orphan_tree_pids);
+        }
+    }
+    let orphan_targets: Vec<_> = targets
+        .iter()
+        .filter(|n| orphan_tree_pids.contains(&n.pid))
+        .collect();
 
     let stats_line = format!(
         "  Total: {}  |  Targets: {}  |  Orphan Targets: {} (cleanable)",
@@ -376,7 +403,24 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         .filter(|n| n.is_target && !n.is_whitelisted)
         .collect();
 
-    let orphan_targets: Vec<_> = targets.iter().filter(|n| n.is_orphan).collect();
+    // Build children map for orphan tree expansion
+    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+    for node in nodes.values() {
+        children_map.entry(node.ppid).or_default().push(node.pid);
+    }
+
+    // Expand orphan roots to include all their descendant targets (cleanable)
+    let mut orphan_tree_pids = HashSet::new();
+    for node in targets.iter() {
+        if node.is_orphan {
+            orphan_tree_pids.insert(node.pid);
+            collect_orphan_tree(node.pid, &children_map, &mut orphan_tree_pids);
+        }
+    }
+    let orphan_targets: Vec<_> = targets
+        .iter()
+        .filter(|n| orphan_tree_pids.contains(&n.pid))
+        .collect();
 
     // Build edges for graph
     let mut edges = Vec::new();
@@ -482,7 +526,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     {}
     <title>proc-janitor Dashboard</title>
-    <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js" integrity="sha384-wF3MqOaDOoJh1GJRKfhPEOBpFAxbPKKGilSOGMrqJVoJWiHRjLsKP4hq3kYMlBh" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js" integrity="sha384-Ux6phic9PEHJ38YtrijhkzyJ8yQlH8i/+buBR8s3mAZOJrP1gwyvAcIYl3GWtpX1" crossorigin="anonymous"></script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -695,14 +739,14 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
     </div>
 
     <script>
-        // Process data
-        const nodes = new vis.DataSet([
+        // Data arrays (no external dependency)
+        const graphNodesData = [
         {}
-        ]);
+        ];
 
-        const edges = new vis.DataSet([
+        const graphEdgesData = [
         {}
-        ]);
+        ];
 
         const sessions = [
         {}
@@ -712,35 +756,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
         {}
         ];
 
-        // Initialize network
-        const container = document.getElementById('network');
-        const data = {{ nodes: nodes, edges: edges }};
-        const options = {{
-            nodes: {{
-                font: {{ color: '#fff', size: 12 }},
-                borderWidth: 2,
-            }},
-            edges: {{
-                color: {{ color: '#555', highlight: '#888' }},
-                arrows: {{ to: {{ enabled: true, scaleFactor: 0.5 }} }},
-                smooth: {{ type: 'cubicBezier' }}
-            }},
-            physics: {{
-                enabled: true,
-                barnesHut: {{
-                    gravitationalConstant: -2000,
-                    springLength: 150
-                }}
-            }},
-            interaction: {{
-                hover: true,
-                tooltipDelay: 100
-            }}
-        }};
-
-        const network = new vis.Network(container, data, options);
-
-        // Render process list
+        // Render process list first (no vis.js dependency)
         const processList = document.getElementById('process-list');
         if (cleanableProcesses.length === 0) {{
             const emptyDiv = document.createElement('div');
@@ -780,7 +796,7 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
             }});
         }}
 
-        // Render session list
+        // Render session list (no vis.js dependency)
         const sessionList = document.getElementById('session-list');
         if (sessions.length === 0) {{
             const emptyDiv = document.createElement('div');
@@ -811,6 +827,43 @@ pub fn generate_dashboard(refresh_secs: Option<u64>) -> Result<PathBuf> {
                 card.appendChild(detailDiv2);
                 sessionList.appendChild(card);
             }});
+        }}
+
+        // Initialize vis.js network graph (wrapped in try-catch for resilience)
+        try {{
+            const nodes = new vis.DataSet(graphNodesData);
+            const edges = new vis.DataSet(graphEdgesData);
+            const container = document.getElementById('network');
+            const data = {{ nodes: nodes, edges: edges }};
+            const options = {{
+                nodes: {{
+                    font: {{ color: '#fff', size: 12 }},
+                    borderWidth: 2,
+                }},
+                edges: {{
+                    color: {{ color: '#555', highlight: '#888' }},
+                    arrows: {{ to: {{ enabled: true, scaleFactor: 0.5 }} }},
+                    smooth: {{ type: 'cubicBezier' }}
+                }},
+                physics: {{
+                    enabled: true,
+                    barnesHut: {{
+                        gravitationalConstant: -2000,
+                        springLength: 150
+                    }}
+                }},
+                interaction: {{
+                    hover: true,
+                    tooltipDelay: 100
+                }}
+            }};
+            new vis.Network(container, data, options);
+        }} catch (e) {{
+            const container = document.getElementById('network');
+            const errDiv = document.createElement('div');
+            errDiv.className = 'empty-state';
+            errDiv.textContent = 'Graph unavailable: failed to load vis-network library';
+            container.appendChild(errDiv);
         }}
     </script>
 </body>

@@ -98,7 +98,8 @@ impl Scanner {
         })
     }
 
-    /// Scan the process table and return orphaned processes that exceed grace period
+    /// Scan the process table and return orphaned processes that exceed grace period.
+    /// Includes orphan roots (PPID=1) and their descendant processes that match targets.
     pub fn scan(&mut self) -> Result<Vec<OrphanProcess>> {
         let mut sys = System::new_with_specifics(
             RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
@@ -109,38 +110,60 @@ impl Scanner {
         let mut current_orphans = Vec::new();
         let mut current_pids = std::collections::HashSet::new();
 
-        // Scan all processes
+        // Phase 1: Build parent→children map
+        let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
         for (pid, process) in sys.processes() {
             let pid_u32 = pid.as_u32();
             current_pids.insert(pid_u32);
+            if let Some(ppid) = process.parent() {
+                children_map.entry(ppid.as_u32()).or_default().push(pid_u32);
+            }
+        }
 
-            // Check if process is an orphan (PPID = 1)
+        // Phase 2: Find orphan target roots (PPID=1 + matches target + not whitelisted)
+        // and expand to include all their descendants
+        let mut orphan_tree_pids = std::collections::HashSet::new();
+        for (pid, process) in sys.processes() {
             if !is_orphan(process) {
                 continue;
             }
+            let cmdline = get_cmdline(process);
+            if cmdline.is_empty() {
+                continue;
+            }
+            if !self.matches_target(&cmdline) {
+                continue;
+            }
+            if self.is_whitelisted(&cmdline) {
+                continue;
+            }
+            let pid_u32 = pid.as_u32();
+            orphan_tree_pids.insert(pid_u32);
+            collect_descendants(pid_u32, &children_map, &mut orphan_tree_pids);
+        }
 
-            // Get command line - convert OsString to String
-            let cmdline = process
-                .cmd()
-                .iter()
-                .map(|s| s.to_string_lossy().to_string())
-                .collect::<Vec<String>>()
-                .join(" ");
+        // Phase 3: Collect all cleanable processes from orphan trees
+        for (pid, process) in sys.processes() {
+            let pid_u32 = pid.as_u32();
+
+            if !orphan_tree_pids.contains(&pid_u32) {
+                continue;
+            }
+
+            let cmdline = get_cmdline(process);
             if cmdline.is_empty() {
                 continue;
             }
 
-            // Check if it matches target patterns
+            // Descendants must also match target patterns (don't kill unrelated children)
             if !self.matches_target(&cmdline) {
                 continue;
             }
-
-            // Check if it's whitelisted
             if self.is_whitelisted(&cmdline) {
                 continue;
             }
 
-            // Track this orphan
+            // Track this process
             let orphan = self
                 .tracked
                 .entry(pid_u32)
@@ -149,7 +172,7 @@ impl Scanner {
                     name: process.name().to_string_lossy().to_string(),
                     cmdline: cmdline.clone(),
                     first_seen: now,
-                    start_time: process.start_time(), // Capture process start time for identity verification
+                    start_time: process.start_time(),
                 });
 
             // Check if grace period has elapsed
@@ -159,7 +182,7 @@ impl Scanner {
             }
         }
 
-        // Remove processes that are no longer orphans
+        // Remove processes that are no longer running
         self.tracked.retain(|pid, _| current_pids.contains(pid));
 
         Ok(current_orphans)
@@ -178,6 +201,31 @@ impl Scanner {
     }
 }
 
+/// Extract command line from a process as a single string
+fn get_cmdline(process: &sysinfo::Process) -> String {
+    process
+        .cmd()
+        .iter()
+        .map(|s| s.to_string_lossy().to_string())
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+/// Recursively collect all descendant PIDs of a given process
+fn collect_descendants(
+    pid: u32,
+    children_map: &HashMap<u32, Vec<u32>>,
+    result: &mut std::collections::HashSet<u32>,
+) {
+    if let Some(children) = children_map.get(&pid) {
+        for &child in children {
+            if result.insert(child) {
+                collect_descendants(child, children_map, result);
+            }
+        }
+    }
+}
+
 /// Check if a process is orphaned (PPID=1, reparented to init/launchd).
 ///
 /// Note: In containers (Docker, etc.), all processes have PPID=1 since PID 1
@@ -189,8 +237,11 @@ fn is_orphan(process: &sysinfo::Process) -> bool {
 
 /// Public function for CLI scan command (creates a fresh Scanner each call)
 pub fn scan(execute: bool) -> Result<ScanResult> {
-    let config = Config::load()?;
+    let mut config = Config::load()?;
     let sigterm_timeout = config.sigterm_timeout;
+    // CLI scan should show results immediately without grace period.
+    // Grace period is only meaningful for the daemon which persists Scanner state.
+    config.grace_period = 0;
     let mut scanner = Scanner::new(config)?;
     scan_with_scanner(&mut scanner, execute, sigterm_timeout)
 }

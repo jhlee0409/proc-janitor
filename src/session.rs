@@ -278,6 +278,24 @@ pub fn register(
         }
     }
 
+    // Validate session name if provided
+    if let Some(ref session_name) = name {
+        if session_name.trim().is_empty() {
+            anyhow::bail!("Session name cannot be empty");
+        }
+        if session_name.len() > 200 {
+            anyhow::bail!("Session name too long (max 200 characters)");
+        }
+        if !session_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' || c == '.')
+        {
+            anyhow::bail!(
+                "Session name must be alphanumeric with hyphens, underscores, spaces, or dots only"
+            );
+        }
+    }
+
     let session_id = id.unwrap_or_else(uuid_v4);
     let tty = get_current_tty();
 
@@ -453,7 +471,7 @@ pub fn unregister(session_id: &str) -> Result<()> {
         store.save_with_lock(&file)?;
         println!("Session {session_id} unregistered.");
     } else {
-        println!("Session {session_id} not found.");
+        anyhow::bail!("Session not found: {session_id}");
     }
     Ok(())
 }
@@ -672,5 +690,34 @@ mod tests {
         assert_eq!(session.pids[0].pid, 100);
         assert_eq!(session.pids[0].start_time, None);
         assert_eq!(session.pids[2].pid, 300);
+    }
+
+    #[test]
+    fn test_register_rejects_empty_name() {
+        let result = super::register(None, Some("".to_string()), "claude".to_string(), None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_register_rejects_whitespace_name() {
+        let result = super::register(None, Some("   ".to_string()), "claude".to_string(), None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_register_rejects_long_name() {
+        let long_name = "A".repeat(201);
+        let result = super::register(None, Some(long_name), "claude".to_string(), None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too long"));
+    }
+
+    #[test]
+    fn test_register_rejects_special_chars_in_name() {
+        let result = super::register(None, Some("<script>alert</script>".to_string()), "claude".to_string(), None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("alphanumeric"));
     }
 }

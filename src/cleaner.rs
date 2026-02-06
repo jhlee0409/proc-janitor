@@ -43,7 +43,7 @@ pub fn clean_process_with_sys(
     dry_run: bool,
 ) -> Result<CleanResult> {
     if dry_run {
-        println!("[DRY-RUN] Would clean process {pid}");
+        eprintln!("[DRY-RUN] Would clean process {pid}");
         return Ok(CleanResult {
             pid,
             name: String::new(),
@@ -53,10 +53,10 @@ pub fn clean_process_with_sys(
         });
     }
 
-    println!("Cleaning process {pid}...");
+    eprintln!("Cleaning process {pid}...");
     match crate::kill::kill_process_with_sys(sys, pid, Some(start_time), sigterm_timeout) {
         Ok(signal) => {
-            println!(
+            eprintln!(
                 "Process {} terminated ({})",
                 pid,
                 if signal == Signal::SIGKILL {

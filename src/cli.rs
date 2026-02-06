@@ -36,7 +36,11 @@ pub enum Commands {
     Status,
 
     /// Scan for orphaned processes (detection only, no killing)
-    Scan,
+    Scan {
+        /// Watch mode: continuously scan at interval (seconds)
+        #[arg(long, short = 'w')]
+        watch: Option<u64>,
+    },
 
     /// Clean up orphaned processes (kills all by default, use filters to be selective)
     Clean {
@@ -47,6 +51,10 @@ pub enum Commands {
         /// Kill only orphans whose command line matches this regex pattern
         #[arg(long, short = 'm')]
         pattern: Option<String>,
+
+        /// Confirm before killing each process
+        #[arg(long, short = 'i')]
+        interactive: bool,
     },
 
     /// Show process tree visualization

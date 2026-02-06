@@ -2,6 +2,9 @@
 
 > Automatic orphan process cleanup daemon for macOS (Linux experimental)
 
+[![CI](https://github.com/jhlee0409/proc-janitor/actions/workflows/ci.yml/badge.svg)](https://github.com/jhlee0409/proc-janitor/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/proc-janitor.svg)](https://crates.io/crates/proc-janitor)
+[![Downloads](https://img.shields.io/crates/d/proc-janitor.svg)](https://crates.io/crates/proc-janitor)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -95,6 +98,9 @@ proc-janitor config init
 # Detect orphaned processes (safe, no killing)
 proc-janitor scan
 
+# Watch mode: continuously scan every 5 seconds
+proc-janitor scan --watch 5
+
 # Kill all detected orphans
 proc-janitor clean
 
@@ -103,6 +109,9 @@ proc-janitor clean --pid 12345 67890
 
 # Kill only orphans matching a pattern
 proc-janitor clean --pattern "node.*mcp"
+
+# Interactive mode: confirm each kill
+proc-janitor clean --interactive
 
 # Start the daemon (runs in background)
 proc-janitor start
@@ -193,8 +202,8 @@ Every config option can be overridden via environment variables. Values outside 
 | `start [-f\|--foreground]` | Start the daemon |
 | `stop` | Stop the daemon |
 | `status` | Show daemon status (systemctl-style with uptime) |
-| `scan` | Detect orphaned processes (safe, no killing) |
-| `clean [--pid PIDs] [--pattern REGEX]` | Kill orphaned target processes (all by default, or filter by PID/pattern) |
+| `scan [-w\|--watch SECS]` | Detect orphaned processes (safe, no killing). With `--watch`, continuously scan at interval. |
+| `clean [--pid PIDs] [--pattern REGEX] [-i\|--interactive]` | Kill orphaned target processes (all by default, or filter by PID/pattern). With `-i`, confirm each kill. |
 | `tree [-t\|--targets-only]` | Visualize process tree |
 | `logs [-f\|--follow] [-n N]` | View logs (N: 1–10000, default 50) |
 | `version` | Show version and build information |
@@ -226,6 +235,20 @@ proc-janitor session auto-clean [--dry-run]
 ```
 
 Supported `--source` values: `claude-code`, `terminal`, `vscode`, `tmux`, or any custom string.
+
+## Daemon Features
+
+### Config Auto-Reload
+
+The daemon watches `config.toml` for changes and automatically reloads when the file is modified. No restart needed — just edit and save.
+
+### Desktop Notifications (macOS)
+
+When the daemon kills orphaned processes, it sends a macOS notification via Notification Center showing the count and process names.
+
+### Cleanup Statistics
+
+Every cleanup action is recorded to `~/.proc-janitor/stats.jsonl` as append-only JSON Lines. Each entry includes a timestamp, the number of processes cleaned, and details of each kill (PID, name, signal used, success/failure).
 
 ## macOS LaunchAgent
 
@@ -271,7 +294,7 @@ proc-janitor/
 │   ├── logger.rs      # Structured logging with rotation
 │   ├── session.rs     # Session-based process tracking (TrackedPid with start_time)
 │   ├── util.rs        # Shared utilities (color detection, symlink protection)
-│   └── visualize.rs   # ASCII tree + HTML dashboard
+│   └── visualize.rs   # ASCII process tree
 ├── resources/
 │   └── com.proc-janitor.plist  # LaunchAgent template
 ├── scripts/

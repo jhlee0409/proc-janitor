@@ -4,7 +4,7 @@ use crate::scanner::{self, Scanner};
 use anyhow::{bail, Context, Result};
 use daemonize::Daemonize;
 use owo_colors::OwoColorize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -42,15 +42,48 @@ pub struct Daemon {
     scanner: Scanner,
     running: Arc<AtomicBool>,
     condvar: Arc<(Mutex<bool>, Condvar)>,
+    config_mtime: Option<std::time::SystemTime>,
 }
 
 impl Daemon {
     pub fn new(config: Config, scanner: Scanner) -> Self {
+        let config_mtime = crate::config::config_path()
+            .ok()
+            .and_then(|p| fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
         Self {
             config,
             scanner,
             running: Arc::new(AtomicBool::new(false)),
             condvar: Arc::new((Mutex::new(false), Condvar::new())),
+            config_mtime,
+        }
+    }
+
+    /// Check if config file has been modified and reload if so
+    fn check_config_reload(&mut self) {
+        let current_mtime = crate::config::config_path()
+            .ok()
+            .and_then(|p| fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+
+        if current_mtime != self.config_mtime {
+            self.config_mtime = current_mtime;
+            match Config::load() {
+                Ok(new_config) => match Scanner::new(new_config.clone()) {
+                    Ok(new_scanner) => {
+                        eprintln!("Config reloaded successfully.");
+                        self.config = new_config;
+                        self.scanner = new_scanner;
+                    }
+                    Err(e) => {
+                        eprintln!("Config reload failed (invalid patterns): {e}");
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Config reload failed: {e}");
+                }
+            }
         }
     }
 
@@ -97,12 +130,21 @@ impl Daemon {
 
         // Main loop - reuses self.scanner to preserve tracked state across cycles
         while self.running.load(Ordering::SeqCst) {
+            self.check_config_reload();
             match scanner::scan_with_scanner(&mut self.scanner) {
                 Ok(result) if !result.orphans.is_empty() => {
-                    if let Err(e) =
-                        crate::cleaner::clean_all(&result.orphans, sigterm_timeout, false)
-                    {
-                        eprintln!("Error cleaning processes: {e}");
+                    let count = result.orphans.len();
+                    match crate::cleaner::clean_all(&result.orphans, sigterm_timeout, false) {
+                        Ok(results) => {
+                            let cleaned = results.iter().filter(|r| r.success).count();
+                            if cleaned > 0 {
+                                send_notification(cleaned);
+                            }
+                            record_cleanup_stats(&results);
+                        }
+                        Err(e) => {
+                            eprintln!("Error cleaning {count} processes: {e}");
+                        }
                     }
                 }
                 Err(e) => {
@@ -117,6 +159,76 @@ impl Daemon {
 
         println!("Daemon stopped.");
         Ok(())
+    }
+}
+
+/// Send a macOS notification when processes are cleaned
+#[cfg(target_os = "macos")]
+fn send_notification(count: usize) {
+    let msg = if count == 1 {
+        "Cleaned 1 orphaned process.".to_string()
+    } else {
+        format!("Cleaned {count} orphaned processes.")
+    };
+    // Fire and forget — don't block the daemon loop
+    let _ = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            &format!("display notification \"{msg}\" with title \"proc-janitor\""),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn send_notification(_count: usize) {
+    // Notifications not supported on this platform
+}
+
+/// A single cleanup event record
+#[derive(Serialize, Deserialize)]
+struct CleanupEvent {
+    timestamp: String,
+    cleaned: usize,
+    failed: usize,
+    processes: Vec<String>,
+}
+
+/// Record a cleanup event to stats file
+fn record_cleanup_stats(results: &[crate::cleaner::CleanResult]) {
+    let cleaned = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - cleaned;
+    if cleaned == 0 && failed == 0 {
+        return;
+    }
+
+    let event = CleanupEvent {
+        timestamp: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+        cleaned,
+        failed,
+        processes: results
+            .iter()
+            .filter(|r| r.success)
+            .map(|r| format!("{} (PID {})", r.name, r.pid))
+            .collect(),
+    };
+
+    let stats_path = match dirs::home_dir() {
+        Some(home) => home.join(".proc-janitor").join("stats.jsonl"),
+        None => return,
+    };
+
+    // Append one JSON line
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stats_path)
+    {
+        if let Ok(line) = serde_json::to_string(&event) {
+            use std::io::Write;
+            let _ = writeln!(file, "{line}");
+        }
     }
 }
 

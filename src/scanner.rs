@@ -36,7 +36,9 @@ pub struct OrphanProcess {
     pub cmdline: String,
     #[serde(skip)]
     pub first_seen: Instant,
-    pub start_time: u64, // Process start time for identity verification
+    pub start_time: u64,     // Process start time for identity verification
+    pub memory_bytes: u64,   // RSS memory usage in bytes
+    pub uptime_seconds: u64, // How long the process has been running
 }
 
 /// Result of a scan operation (detection only, no killing)
@@ -163,6 +165,10 @@ impl Scanner {
             }
 
             // Track this process
+            let current_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             let orphan = self
                 .tracked
                 .entry(pid_u32)
@@ -172,6 +178,8 @@ impl Scanner {
                     cmdline: cmdline.clone(),
                     first_seen: now,
                     start_time: process.start_time(),
+                    memory_bytes: process.memory(),
+                    uptime_seconds: current_time.saturating_sub(process.start_time()),
                 });
 
             // Check if grace period has elapsed

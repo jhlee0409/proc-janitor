@@ -204,6 +204,72 @@ pub fn clean_filtered(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummar
     })
 }
 
+/// Clean orphaned processes with interactive confirmation per process.
+pub fn clean_interactive(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummary> {
+    let mut config = Config::load()?;
+    let sigterm_timeout = config.sigterm_timeout;
+    let targets_configured = !config.targets.is_empty();
+    config.grace_period = 0;
+    let mut scanner = crate::scanner::Scanner::new(config)?;
+    let orphans = scanner.scan()?;
+
+    if let Some(p) = pattern {
+        if p.len() > 1024 {
+            anyhow::bail!("Filter pattern too long (max 1024 characters)");
+        }
+    }
+    let pattern_re = pattern
+        .map(Regex::new)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("Invalid filter pattern: {e}"))?;
+
+    let pid_set: HashSet<u32> = pids.iter().copied().collect();
+    let filtered: Vec<&crate::scanner::OrphanProcess> = orphans
+        .iter()
+        .filter(|o| {
+            let pid_ok = pid_set.is_empty() || pid_set.contains(&o.pid);
+            #[allow(clippy::unnecessary_map_or)]
+            let pattern_ok = pattern_re
+                .as_ref()
+                .map_or(true, |re| re.is_match(&o.cmdline));
+            pid_ok && pattern_ok
+        })
+        .collect();
+
+    let mut approved: Vec<crate::scanner::OrphanProcess> = Vec::new();
+    for orphan in &filtered {
+        eprintln!(
+            "\nPID {} - {}\n  Command: {}",
+            orphan.pid, orphan.name, orphan.cmdline
+        );
+        eprint!("  Kill this process? [y/N] ");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if input.trim().eq_ignore_ascii_case("y") {
+            approved.push((*orphan).clone());
+        } else {
+            eprintln!("  Skipped.");
+        }
+    }
+
+    let results = if !approved.is_empty() {
+        clean_all(&approved, sigterm_timeout, false)?
+    } else {
+        Vec::new()
+    };
+
+    let successful = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - successful;
+
+    Ok(CleanSummary {
+        total: results.len(),
+        successful,
+        failed,
+        results,
+        targets_configured,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +295,8 @@ mod tests {
             cmdline: "test cmd".to_string(),
             first_seen: std::time::Instant::now(),
             start_time: 0,
+            memory_bytes: 0,
+            uptime_seconds: 0,
         }];
         let results = clean_all(&orphans, 5, true).unwrap();
         assert_eq!(results.len(), 1);

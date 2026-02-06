@@ -34,71 +34,104 @@ fn run() -> Result<()> {
             daemon::status(cli.json)?;
         }
 
-        Commands::Scan => {
-            let spinner = if !cli.json && !cli.quiet {
-                let sp = indicatif::ProgressBar::new_spinner();
-                sp.set_message("Scanning for orphaned processes...");
-                sp.enable_steady_tick(std::time::Duration::from_millis(100));
-                Some(sp)
-            } else {
-                None
-            };
-
-            let result = scanner::scan()?;
-
-            if let Some(sp) = spinner {
-                sp.finish_and_clear();
-            }
-
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else if result.orphans.is_empty() {
-                if !cli.quiet {
-                    if use_color() {
-                        println!("{}", "No orphaned processes found.".green());
-                    } else {
-                        println!("No orphaned processes found.");
-                    }
-                    if !result.targets_configured {
+        Commands::Scan { watch } => {
+            let print_scan = |result: &scanner::ScanResult, json: bool, quiet: bool| {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(result).unwrap());
+                } else if result.orphans.is_empty() {
+                    if !quiet {
                         if use_color() {
-                            println!(
-                                "\n{}",
-                                "No target patterns configured. Run 'proc-janitor config init' to set up targets."
-                                    .yellow()
-                            );
+                            println!("{}", "No orphaned processes found.".green());
                         } else {
-                            println!(
-                                "\nNo target patterns configured. Run 'proc-janitor config init' to set up targets."
-                            );
+                            println!("No orphaned processes found.");
+                        }
+                        if !result.targets_configured {
+                            if use_color() {
+                                println!(
+                                    "\n{}",
+                                    "No target patterns configured. Run 'proc-janitor config init' to set up targets."
+                                        .yellow()
+                                );
+                            } else {
+                                println!(
+                                    "\nNo target patterns configured. Run 'proc-janitor config init' to set up targets."
+                                );
+                            }
                         }
                     }
+                } else if quiet {
+                    for orphan in &result.orphans {
+                        println!("{}", orphan.pid);
+                    }
+                } else {
+                    println!("Found {} orphaned process(es):", result.orphan_count);
+                    for orphan in &result.orphans {
+                        let mem = format_bytes(orphan.memory_bytes);
+                        let uptime = format_duration(orphan.uptime_seconds);
+                        println!(
+                            "  PID {} - {} ({}  {})\n    Command: {}",
+                            orphan.pid, orphan.name, mem, uptime, orphan.cmdline
+                        );
+                    }
+                    if use_color() {
+                        println!(
+                            "\n{}",
+                            "Use 'proc-janitor clean' to kill these processes.".yellow()
+                        );
+                    } else {
+                        println!("\nUse 'proc-janitor clean' to kill these processes.");
+                    }
                 }
-            } else if cli.quiet {
-                // Quiet mode: one PID per line for easy scripting
-                for orphan in &result.orphans {
-                    println!("{}", orphan.pid);
+            };
+
+            if let Some(interval) = watch {
+                let interval = interval.max(1); // minimum 1 second
+                loop {
+                    // Clear screen
+                    print!("\x1B[2J\x1B[H");
+                    if use_color() {
+                        println!(
+                            "{} (every {}s, Ctrl+C to stop)\n",
+                            "proc-janitor watch".bold(),
+                            interval
+                        );
+                    } else {
+                        println!("proc-janitor watch (every {interval}s, Ctrl+C to stop)\n");
+                    }
+                    let result = scanner::scan()?;
+                    print_scan(&result, cli.json, cli.quiet);
+                    std::thread::sleep(std::time::Duration::from_secs(interval));
                 }
             } else {
-                println!("Found {} orphaned process(es):", result.orphan_count);
-                for orphan in &result.orphans {
-                    println!(
-                        "  PID {} - {}\n    Command: {}",
-                        orphan.pid, orphan.name, orphan.cmdline
-                    );
-                }
-                if use_color() {
-                    println!(
-                        "\n{}",
-                        "Use 'proc-janitor clean' to kill these processes.".yellow()
-                    );
+                let spinner = if !cli.json && !cli.quiet {
+                    let sp = indicatif::ProgressBar::new_spinner();
+                    sp.set_message("Scanning for orphaned processes...");
+                    sp.enable_steady_tick(std::time::Duration::from_millis(100));
+                    Some(sp)
                 } else {
-                    println!("\nUse 'proc-janitor clean' to kill these processes.");
+                    None
+                };
+
+                let result = scanner::scan()?;
+
+                if let Some(sp) = spinner {
+                    sp.finish_and_clear();
                 }
+
+                print_scan(&result, cli.json, cli.quiet);
             }
         }
 
-        Commands::Clean { pid, pattern } => {
-            let result = cleaner::clean_filtered(&pid, pattern.as_deref())?;
+        Commands::Clean {
+            pid,
+            pattern,
+            interactive,
+        } => {
+            let result = if interactive {
+                cleaner::clean_interactive(&pid, pattern.as_deref())?
+            } else {
+                cleaner::clean_filtered(&pid, pattern.as_deref())?
+            };
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -252,6 +285,30 @@ fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_duration(secs: u64) -> String {
+    if secs >= 86400 {
+        format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
+    } else if secs >= 3600 {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
 }
 
 fn main() {

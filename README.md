@@ -229,7 +229,7 @@ launchctl unload ~/Library/LaunchAgents/com.proc-janitor.plist
 
 ## Architecture
 
-```
+```text
 proc-janitor/
 ├── src/
 │   ├── main.rs        # Entry point

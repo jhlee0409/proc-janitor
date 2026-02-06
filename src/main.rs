@@ -73,6 +73,11 @@ fn run() -> Result<()> {
                         }
                     }
                 }
+            } else if cli.quiet {
+                // Quiet mode: one PID per line for easy scripting
+                for orphan in &result.orphans {
+                    println!("{}", orphan.pid);
+                }
             } else {
                 println!("Found {} orphaned process(es):", result.orphan_count);
                 for orphan in &result.orphans {
@@ -81,12 +86,12 @@ fn run() -> Result<()> {
                         orphan.pid, orphan.name, orphan.cmdline
                     );
                 }
-                if !cli.quiet && use_color() {
+                if use_color() {
                     println!(
                         "\n{}",
                         "Use 'proc-janitor clean' to kill these processes.".yellow()
                     );
-                } else if !cli.quiet {
+                } else {
                     println!("\nUse 'proc-janitor clean' to kill these processes.");
                 }
             }
@@ -118,6 +123,9 @@ fn run() -> Result<()> {
                         }
                     }
                 }
+            } else if cli.quiet {
+                // Quiet mode: just counts for scripting
+                println!("{}/{}", result.successful, result.total);
             } else {
                 if result.failed == 0 && use_color() {
                     println!("\n{}", "Cleanup complete:".green());

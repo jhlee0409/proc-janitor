@@ -34,6 +34,12 @@ Every 5 seconds (configurable):
 
 ## Installation
 
+### From crates.io
+
+```bash
+cargo install proc-janitor
+```
+
 ### Build from Source
 
 ```bash
@@ -215,6 +221,7 @@ launchctl unload ~/Library/LaunchAgents/com.proc-janitor.plist
 - **Daemon identity verification** — `stop` confirms the PID file points to an actual proc-janitor process before sending signals
 - **Symlink protection** — refuses to write to symlinks at predictable paths (`~/.proc-janitor/`), preventing local symlink attacks
 - **TOCTOU-safe session store** — exclusive file lock held across full read-modify-write cycle
+- **Guided setup** — shows a helpful hint when no target patterns are configured, guiding users to `config init`
 - **Scan before clean** — `scan` is always safe (detection only), `clean` is always destructive (with optional filters)
 - **Atomic file operations** — config and session data use file locking with fsync for crash safety
 - **Directory permissions** — `~/.proc-janitor/` created with `0o700` (owner-only access)

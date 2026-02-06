@@ -198,7 +198,7 @@ fn test_doctor_command() {
 #[test]
 fn test_daemon_foreground_dry_run() {
     // Start daemon in foreground + dry-run, kill it after 2 seconds
-    let mut child = std::process::Command::new(binary_path())
+    let child = std::process::Command::new(binary_path())
         .args(["start", "--foreground", "--dry-run"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

@@ -139,7 +139,7 @@ impl Scanner {
             crate::util::collect_descendants(root, &children_map, &mut orphan_tree_pids);
         }
 
-        // Phase 3: Collect all cleanable processes from orphan trees
+        // Phase 2: Collect all cleanable processes from orphan trees
         for (pid, process) in sys.processes() {
             let pid_u32 = pid.as_u32();
 

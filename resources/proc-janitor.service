@@ -1,0 +1,20 @@
+[Unit]
+Description=proc-janitor - Automatic orphan process cleanup daemon
+Documentation=https://github.com/jhlee0409/proc-janitor
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/proc-janitor start --foreground
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.proc-janitor %h/.config/proc-janitor
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

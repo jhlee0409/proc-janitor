@@ -729,6 +729,36 @@ pub fn show_env() -> Result<()> {
     Ok(())
 }
 
+/// Validate configuration file and report results
+pub fn validate_cmd() -> Result<()> {
+    let path = config_path()?;
+    if !path.exists() {
+        anyhow::bail!(
+            "Config file not found: {}\nRun 'proc-janitor config init' to create one.",
+            path.display()
+        );
+    }
+
+    let config = Config::load()?;
+    config.validate()?;
+
+    let use_color = crate::util::use_color();
+    if use_color {
+        use owo_colors::OwoColorize;
+        println!("{}", "Configuration is valid.".green());
+    } else {
+        println!("Configuration is valid.");
+    }
+    println!("  Config file: {}", path.display());
+    println!("  Targets: {} pattern(s)", config.targets.len());
+    println!("  Whitelist: {} pattern(s)", config.whitelist.len());
+    println!("  Scan interval: {}s", config.scan_interval);
+    println!("  Grace period: {}s", config.grace_period);
+    println!("  SIGTERM timeout: {}s", config.sigterm_timeout);
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -60,7 +60,31 @@ cd proc-janitor && bash scripts/install.sh
 
 This builds the binary, installs it, creates a default config, and sets up a macOS LaunchAgent for auto-start on login.
 
-> **Linux note:** The daemon runs on Linux via `proc-janitor start`, but there is no systemd service file yet. The install script and LaunchAgent are macOS-only. Contributions welcome!
+### Homebrew (macOS)
+
+```bash
+brew tap jhlee0409/proc-janitor
+brew install proc-janitor
+brew services start proc-janitor
+```
+
+### Uninstall
+
+```bash
+# Via install script
+bash scripts/uninstall.sh
+
+# Or via Homebrew
+brew uninstall proc-janitor
+```
+
+### Linux (systemd)
+
+```bash
+cargo install proc-janitor
+sudo cp resources/proc-janitor.service /etc/systemd/user/
+systemctl --user enable --now proc-janitor
+```
 
 ## Quick Start
 
@@ -160,6 +184,7 @@ Every config option can be overridden via environment variables. Values outside 
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--json` | `-j` | Output results in JSON format (supported by: `status`, `config show`, `scan`, `clean`) |
+| `--quiet` | `-q` | Suppress non-essential output (hints, spinners). Useful for scripts and cron jobs. |
 
 ### Core Commands
 
@@ -172,6 +197,7 @@ Every config option can be overridden via environment variables. Values outside 
 | `clean [--pid PIDs] [--pattern REGEX]` | Kill orphaned target processes (all by default, or filter by PID/pattern) |
 | `tree [-t\|--targets-only]` | Visualize process tree |
 | `logs [-f\|--follow] [-n N]` | View logs (N: 1–10000, default 50) |
+| `version` | Show version and build information |
 | `doctor` | Diagnose common issues and check system health |
 | `completions <shell>` | Generate shell completions (`bash`, `zsh`, `fish`, `powershell`) |
 
@@ -183,6 +209,7 @@ Every config option can be overridden via environment variables. Values outside 
 | `config show` | Display current config |
 | `config edit` | Edit config in `$EDITOR` (validates after save, supports flags like `code --wait`) |
 | `config env` | Show all environment variable overrides with current values |
+| `config validate` | Validate configuration file and show a summary |
 
 ### Session Commands
 

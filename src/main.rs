@@ -35,7 +35,7 @@ fn run() -> Result<()> {
         }
 
         Commands::Scan => {
-            let spinner = if !cli.json {
+            let spinner = if !cli.json && !cli.quiet {
                 let sp = indicatif::ProgressBar::new_spinner();
                 sp.set_message("Scanning for orphaned processes...");
                 sp.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -53,22 +53,24 @@ fn run() -> Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if result.orphans.is_empty() {
-                if use_color() {
-                    println!("{}", "No orphaned processes found.".green());
-                } else {
-                    println!("No orphaned processes found.");
-                }
-                if !result.targets_configured {
+                if !cli.quiet {
                     if use_color() {
-                        println!(
-                            "\n{}",
-                            "No target patterns configured. Run 'proc-janitor config init' to set up targets."
-                                .yellow()
-                        );
+                        println!("{}", "No orphaned processes found.".green());
                     } else {
-                        println!(
-                            "\nNo target patterns configured. Run 'proc-janitor config init' to set up targets."
-                        );
+                        println!("No orphaned processes found.");
+                    }
+                    if !result.targets_configured {
+                        if use_color() {
+                            println!(
+                                "\n{}",
+                                "No target patterns configured. Run 'proc-janitor config init' to set up targets."
+                                    .yellow()
+                            );
+                        } else {
+                            println!(
+                                "\nNo target patterns configured. Run 'proc-janitor config init' to set up targets."
+                            );
+                        }
                     }
                 }
             } else {
@@ -79,12 +81,12 @@ fn run() -> Result<()> {
                         orphan.pid, orphan.name, orphan.cmdline
                     );
                 }
-                if use_color() {
+                if !cli.quiet && use_color() {
                     println!(
                         "\n{}",
                         "Use 'proc-janitor clean' to kill these processes.".yellow()
                     );
-                } else {
+                } else if !cli.quiet {
                     println!("\nUse 'proc-janitor clean' to kill these processes.");
                 }
             }
@@ -96,22 +98,24 @@ fn run() -> Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if result.total == 0 {
-                if use_color() {
-                    println!("{}", "No orphaned processes found to clean.".green());
-                } else {
-                    println!("No orphaned processes found to clean.");
-                }
-                if pid.is_empty() && pattern.is_none() && !result.targets_configured {
+                if !cli.quiet {
                     if use_color() {
-                        println!(
-                            "\n{}",
-                            "No target patterns configured. Run 'proc-janitor config init' to set up targets."
-                                .yellow()
-                        );
+                        println!("{}", "No orphaned processes found to clean.".green());
                     } else {
-                        println!(
-                            "\nNo target patterns configured. Run 'proc-janitor config init' to set up targets."
-                        );
+                        println!("No orphaned processes found to clean.");
+                    }
+                    if pid.is_empty() && pattern.is_none() && !result.targets_configured {
+                        if use_color() {
+                            println!(
+                                "\n{}",
+                                "No target patterns configured. Run 'proc-janitor config init' to set up targets."
+                                    .yellow()
+                            );
+                        } else {
+                            println!(
+                                "\nNo target patterns configured. Run 'proc-janitor config init' to set up targets."
+                            );
+                        }
                     }
                 }
             } else {
@@ -184,6 +188,9 @@ fn run() -> Result<()> {
             ConfigCommands::Env => {
                 config::show_env()?;
             }
+            ConfigCommands::Validate => {
+                config::validate_cmd()?;
+            }
         },
 
         Commands::Logs { follow, lines } => {
@@ -218,6 +225,12 @@ fn run() -> Result<()> {
                 session::auto_clean(dry_run)?;
             }
         },
+
+        Commands::Version => {
+            println!("proc-janitor {}", env!("CARGO_PKG_VERSION"));
+            println!("License: {}", env!("CARGO_PKG_LICENSE"));
+            println!("Repository: {}", env!("CARGO_PKG_REPOSITORY"));
+        }
 
         Commands::Completions { shell } => {
             use clap::CommandFactory;

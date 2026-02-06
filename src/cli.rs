@@ -12,6 +12,10 @@ pub struct Cli {
     #[arg(long, short = 'j', global = true)]
     pub json: bool,
 
+    /// Suppress non-essential output
+    #[arg(long, short = 'q', global = true)]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -78,6 +82,9 @@ pub enum Commands {
         shell: clap_complete::Shell,
     },
 
+    /// Show version and build information
+    Version,
+
     /// Diagnose common issues and check system health
     Doctor,
 }
@@ -114,6 +121,9 @@ pub enum ConfigCommands {
 
     /// Show all environment variable overrides
     Env,
+
+    /// Validate configuration file
+    Validate,
 }
 
 #[derive(Subcommand, Debug)]

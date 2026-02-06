@@ -20,9 +20,18 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { foreground } => {
-            println!("Starting proc-janitor daemon...");
-            daemon::start(foreground)?;
+        Commands::Start {
+            foreground,
+            dry_run,
+        } => {
+            if dry_run {
+                println!(
+                    "Starting proc-janitor daemon in DRY-RUN mode (no processes will be killed)..."
+                );
+            } else {
+                println!("Starting proc-janitor daemon...");
+            }
+            daemon::start(foreground, dry_run)?;
         }
 
         Commands::Stop => {

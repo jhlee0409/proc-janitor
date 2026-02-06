@@ -43,10 +43,11 @@ pub struct Daemon {
     running: Arc<AtomicBool>,
     condvar: Arc<(Mutex<bool>, Condvar)>,
     config_mtime: Option<std::time::SystemTime>,
+    dry_run: bool,
 }
 
 impl Daemon {
-    pub fn new(config: Config, scanner: Scanner) -> Self {
+    pub fn new(config: Config, scanner: Scanner, dry_run: bool) -> Self {
         let config_mtime = crate::config::config_path()
             .ok()
             .and_then(|p| fs::metadata(p).ok())
@@ -57,6 +58,7 @@ impl Daemon {
             running: Arc::new(AtomicBool::new(false)),
             condvar: Arc::new((Mutex::new(false), Condvar::new())),
             config_mtime,
+            dry_run,
         }
     }
 
@@ -134,16 +136,26 @@ impl Daemon {
             match scanner::scan_with_scanner(&mut self.scanner) {
                 Ok(result) if !result.orphans.is_empty() => {
                     let count = result.orphans.len();
-                    match crate::cleaner::clean_all(&result.orphans, sigterm_timeout, false) {
-                        Ok(results) => {
-                            let cleaned = results.iter().filter(|r| r.success).count();
-                            if cleaned > 0 {
-                                send_notification(cleaned);
-                            }
-                            record_cleanup_stats(&results);
+                    if self.dry_run {
+                        eprintln!("[DRY-RUN] Would clean {count} orphaned process(es):");
+                        for orphan in &result.orphans {
+                            eprintln!(
+                                "[DRY-RUN]   PID {} - {} ({})",
+                                orphan.pid, orphan.name, orphan.cmdline
+                            );
                         }
-                        Err(e) => {
-                            eprintln!("Error cleaning {count} processes: {e}");
+                    } else {
+                        match crate::cleaner::clean_all(&result.orphans, sigterm_timeout, false) {
+                            Ok(results) => {
+                                let cleaned = results.iter().filter(|r| r.success).count();
+                                if cleaned > 0 {
+                                    send_notification(cleaned);
+                                }
+                                record_cleanup_stats(&results);
+                            }
+                            Err(e) => {
+                                eprintln!("Error cleaning {count} processes: {e}");
+                            }
                         }
                     }
                 }
@@ -223,6 +235,19 @@ fn record_cleanup_stats(results: &[crate::cleaner::CleanResult]) {
     if let Err(e) = crate::util::check_not_symlink(&stats_path) {
         tracing::warn!("Refusing to write stats: {e}");
         return;
+    }
+
+    // Rotate if file exceeds 5 MB
+    const MAX_STATS_SIZE: u64 = 5 * 1024 * 1024;
+    if let Ok(meta) = std::fs::metadata(&stats_path) {
+        if meta.len() > MAX_STATS_SIZE {
+            let rotated = stats_path.with_extension("jsonl.old");
+            if let Err(e) = crate::util::check_not_symlink(&rotated) {
+                tracing::warn!("Refusing to rotate stats: {e}");
+                return;
+            }
+            let _ = std::fs::rename(&stats_path, &rotated);
+        }
     }
 
     // Append one JSON line
@@ -346,7 +371,7 @@ pub fn daemonize() -> Result<()> {
 }
 
 /// Start the daemon (called from CLI)
-pub fn start(foreground: bool) -> Result<()> {
+pub fn start(foreground: bool, dry_run: bool) -> Result<()> {
     // Try to acquire exclusive lock on PID file to prevent race conditions
     let pid_path = get_pid_file_path()?;
     let lock_file = std::fs::OpenOptions::new()
@@ -401,7 +426,7 @@ pub fn start(foreground: bool) -> Result<()> {
         write_pid_file(std::process::id())?;
 
         // Create and start daemon
-        let mut daemon = Daemon::new(config, scanner);
+        let mut daemon = Daemon::new(config, scanner, dry_run);
         daemon.start()?;
 
         // Cleanup on exit
@@ -415,7 +440,7 @@ pub fn start(foreground: bool) -> Result<()> {
 
         // Create and start daemon
         // Note: lock_file is kept open and locked until this process exits
-        let mut daemon = Daemon::new(config, scanner);
+        let mut daemon = Daemon::new(config, scanner, dry_run);
         daemon.start()?;
 
         // Cleanup on exit

@@ -736,7 +736,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "proc-janitor"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -749,6 +749,7 @@ dependencies = [
  "filetime",
  "fs2",
  "indicatif",
+ "libc",
  "nix 0.29.0",
  "owo-colors",
  "regex",

@@ -597,44 +597,9 @@ fn get_current_tty() -> Option<String> {
         .ok()
 }
 
-/// Find all descendant PIDs from a list of parent PIDs
+/// Find all descendant PIDs from a list of parent PIDs (delegates to shared util)
 fn find_descendant_pids(sys: &System, parent_pids: &[u32]) -> Vec<u32> {
-    // Build parent->children map once for O(n) traversal
-    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (pid, process) in sys.processes() {
-        if let Some(parent) = process.parent() {
-            children_map
-                .entry(parent.as_u32())
-                .or_default()
-                .push(pid.as_u32());
-        }
-    }
-
-    let mut result = Vec::new();
-    let mut visited = std::collections::HashSet::new();
-    let mut to_check: Vec<u32> = parent_pids.to_vec();
-
-    while let Some(pid) = to_check.pop() {
-        if !visited.insert(pid) {
-            continue; // Already visited
-        }
-
-        // Check if process still exists
-        if sys.process(sysinfo::Pid::from_u32(pid)).is_some() {
-            result.push(pid);
-        }
-
-        // Add children to check
-        if let Some(children) = children_map.get(&pid) {
-            for &child_pid in children {
-                if !visited.contains(&child_pid) {
-                    to_check.push(child_pid);
-                }
-            }
-        }
-    }
-
-    result
+    crate::util::find_descendant_pids(sys, parent_pids)
 }
 
 #[cfg(test)]

@@ -27,6 +27,10 @@ pub enum Commands {
         /// Run in foreground (don't daemonize)
         #[arg(long, short = 'f')]
         foreground: bool,
+
+        /// Dry-run mode: scan and log what would be killed, but don't send signals
+        #[arg(long, short = 'd')]
+        dry_run: bool,
     },
 
     /// Stop the daemon

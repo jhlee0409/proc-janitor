@@ -622,10 +622,34 @@ pub fn edit() -> Result<()> {
         .status()
         .with_context(|| format!("Failed to open editor for config: {}", path.display()))?;
 
-    // Validate the edited config
-    match Config::load() {
-        Ok(_) => println!("Configuration validated successfully."),
-        Err(e) => eprintln!("Warning: Configuration has errors: {e}"),
+    // Validate the edited config, retry on failure
+    loop {
+        match Config::load() {
+            Ok(_) => {
+                println!("Configuration validated successfully.");
+                break;
+            }
+            Err(e) => {
+                eprintln!("Warning: Configuration has errors: {e}");
+                eprint!("Re-open editor to fix? [Y/n] ");
+                let mut input = String::new();
+                if std::io::stdin().read_line(&mut input).is_err() {
+                    break;
+                }
+                let answer = input.trim();
+                if answer.eq_ignore_ascii_case("n") || answer.eq_ignore_ascii_case("no") {
+                    eprintln!("Config left with errors. Fix manually or run 'config edit' again.");
+                    break;
+                }
+                // Re-open editor
+                let mut retry_cmd = std::process::Command::new(editor_bin);
+                if parts.len() > 1 {
+                    retry_cmd.args(&parts[1..]);
+                }
+                retry_cmd.arg(&path);
+                let _ = retry_cmd.status();
+            }
+        }
     }
 
     Ok(())
@@ -906,6 +930,90 @@ mod tests {
         // Cleanup
         std::env::remove_var("PROC_JANITOR_TARGETS");
         std::env::remove_var("PROC_JANITOR_WHITELIST");
+    }
+
+    #[test]
+    fn test_validate_scan_interval_zero() {
+        let mut config = Config::default();
+        config.scan_interval = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_scan_interval_max() {
+        let mut config = Config::default();
+        config.scan_interval = 3600;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_scan_interval_over_max() {
+        let mut config = Config::default();
+        config.scan_interval = 3601;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_grace_period_zero() {
+        let mut config = Config::default();
+        config.grace_period = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_grace_period_over_max() {
+        let mut config = Config::default();
+        config.grace_period = 3601;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_sigterm_timeout_zero() {
+        let mut config = Config::default();
+        config.sigterm_timeout = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_sigterm_timeout_max() {
+        let mut config = Config::default();
+        config.sigterm_timeout = 60;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_sigterm_timeout_over_max() {
+        let mut config = Config::default();
+        config.sigterm_timeout = 61;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_too_many_targets() {
+        let mut config = Config::default();
+        config.targets = (0..101).map(|i| format!("pattern{i}")).collect();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_max_targets_ok() {
+        let mut config = Config::default();
+        config.targets = (0..100).map(|i| format!("pattern{i}")).collect();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_pattern_too_long() {
+        let mut config = Config::default();
+        config.targets = vec!["a".repeat(1025)];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_pattern_at_max_length() {
+        let mut config = Config::default();
+        config.targets = vec!["a".repeat(1024)];
+        assert!(config.validate().is_ok());
     }
 
     #[test]

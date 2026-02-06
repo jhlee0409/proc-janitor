@@ -56,6 +56,68 @@ pub fn open_nofollow_write(path: &std::path::Path) -> anyhow::Result<std::fs::Fi
         })
 }
 
+/// Build a parent→children map from the process table.
+/// Returns a HashMap where keys are parent PIDs and values are vectors of child PIDs.
+pub fn build_children_map(sys: &sysinfo::System) -> std::collections::HashMap<u32, Vec<u32>> {
+    let mut children_map: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
+    for (pid, process) in sys.processes() {
+        if let Some(parent) = process.parent() {
+            children_map
+                .entry(parent.as_u32())
+                .or_default()
+                .push(pid.as_u32());
+        }
+    }
+    children_map
+}
+
+/// Recursively collect all descendant PIDs from a set of roots using a pre-built children map.
+/// Includes cycle detection via visited set.
+pub fn collect_descendants(
+    pid: u32,
+    children_map: &std::collections::HashMap<u32, Vec<u32>>,
+    result: &mut std::collections::HashSet<u32>,
+) {
+    if let Some(children) = children_map.get(&pid) {
+        for &child in children {
+            if result.insert(child) {
+                collect_descendants(child, children_map, result);
+            }
+        }
+    }
+}
+
+/// Find all descendant PIDs from a list of parent PIDs, including the parents themselves.
+/// Builds the children map internally from the System instance.
+pub fn find_descendant_pids(sys: &sysinfo::System, parent_pids: &[u32]) -> Vec<u32> {
+    let children_map = build_children_map(sys);
+
+    let mut result = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut to_check: Vec<u32> = parent_pids.to_vec();
+
+    while let Some(pid) = to_check.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+
+        if sys.process(sysinfo::Pid::from_u32(pid)).is_some() {
+            result.push(pid);
+        }
+
+        if let Some(children) = children_map.get(&pid) {
+            for &child_pid in children {
+                if !visited.contains(&child_pid) {
+                    to_check.push(child_pid);
+                }
+            }
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

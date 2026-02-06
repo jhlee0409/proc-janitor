@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+extern crate libc;
+
 fn binary_path() -> PathBuf {
     let mut path = std::env::current_exe().unwrap();
     path.pop(); // Remove test binary name
@@ -151,6 +153,96 @@ fn test_clean_with_pid_filter() {
 fn test_clean_with_pattern_filter() {
     let output = Command::new(binary_path())
         .args(["clean", "--pattern", "nonexistent_process_xyz"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_version_command() {
+    let output = Command::new(binary_path())
+        .arg("version")
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("proc-janitor"));
+    assert!(stdout.contains("MIT"));
+}
+
+#[test]
+fn test_config_validate() {
+    let output = Command::new(binary_path())
+        .args(["config", "validate"])
+        .output()
+        .expect("Failed to execute command");
+
+    // Should succeed (config exists or uses defaults)
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("valid") || stdout.contains("Valid"));
+}
+
+#[test]
+fn test_doctor_command() {
+    let output = Command::new(binary_path())
+        .arg("doctor")
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_daemon_foreground_dry_run() {
+    // Start daemon in foreground + dry-run, kill it after 2 seconds
+    let mut child = std::process::Command::new(binary_path())
+        .args(["start", "--foreground", "--dry-run"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to start daemon");
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Send SIGTERM to stop gracefully
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+
+    let output = child.wait_with_output().expect("Failed to wait for daemon");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+
+    // Should have started and stopped gracefully
+    assert!(
+        combined.contains("DRY-RUN")
+            || combined.contains("foreground")
+            || combined.contains("Daemon"),
+        "Expected daemon output, got: {combined}"
+    );
+}
+
+#[test]
+fn test_scan_quiet_mode() {
+    let output = Command::new(binary_path())
+        .args(["--quiet", "scan"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    // Quiet mode should not contain hints or spinners
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Use 'proc-janitor"));
+}
+
+#[test]
+fn test_clean_quiet_mode() {
+    let output = Command::new(binary_path())
+        .args(["--quiet", "clean"])
         .output()
         .expect("Failed to execute command");
 

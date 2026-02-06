@@ -1,6 +1,6 @@
 [package]
 name = "proc-janitor"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 authors = ["Jack <jhlee0409@users.noreply.github.com>"]
 description = "Automatic orphan process cleaner daemon for macOS/Linux"
@@ -55,6 +55,7 @@ clap_complete = "4"
 clap_mangen = "0.2"
 
 [dev-dependencies]
+libc = "0.2"
 tempfile = "3"
 filetime = "0.2"
 serial_test = "3"

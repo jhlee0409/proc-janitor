@@ -111,36 +111,32 @@ impl Scanner {
         let mut current_orphans = Vec::new();
         let mut current_pids = std::collections::HashSet::new();
 
-        // Phase 1: Build parent→children map
+        // Phase 1: Single pass — build children map, collect current PIDs,
+        // and identify orphan roots (PPID=1 + matches target + not whitelisted)
         let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut orphan_roots = Vec::new();
         for (pid, process) in sys.processes() {
             let pid_u32 = pid.as_u32();
             current_pids.insert(pid_u32);
             if let Some(ppid) = process.parent() {
                 children_map.entry(ppid.as_u32()).or_default().push(pid_u32);
             }
+            if is_orphan(process) {
+                let cmdline = get_cmdline(process);
+                if !cmdline.is_empty()
+                    && self.matches_target(&cmdline)
+                    && !self.is_whitelisted(&cmdline)
+                {
+                    orphan_roots.push(pid_u32);
+                }
+            }
         }
 
-        // Phase 2: Find orphan target roots (PPID=1 + matches target + not whitelisted)
-        // and expand to include all their descendants
+        // Expand orphan roots to include all their descendants
         let mut orphan_tree_pids = std::collections::HashSet::new();
-        for (pid, process) in sys.processes() {
-            if !is_orphan(process) {
-                continue;
-            }
-            let cmdline = get_cmdline(process);
-            if cmdline.is_empty() {
-                continue;
-            }
-            if !self.matches_target(&cmdline) {
-                continue;
-            }
-            if self.is_whitelisted(&cmdline) {
-                continue;
-            }
-            let pid_u32 = pid.as_u32();
-            orphan_tree_pids.insert(pid_u32);
-            collect_descendants(pid_u32, &children_map, &mut orphan_tree_pids);
+        for root in orphan_roots {
+            orphan_tree_pids.insert(root);
+            crate::util::collect_descendants(root, &children_map, &mut orphan_tree_pids);
         }
 
         // Phase 3: Collect all cleanable processes from orphan trees
@@ -216,21 +212,6 @@ fn get_cmdline(process: &sysinfo::Process) -> String {
         .map(|s| s.to_string_lossy().to_string())
         .collect::<Vec<String>>()
         .join(" ")
-}
-
-/// Recursively collect all descendant PIDs of a given process
-fn collect_descendants(
-    pid: u32,
-    children_map: &HashMap<u32, Vec<u32>>,
-    result: &mut std::collections::HashSet<u32>,
-) {
-    if let Some(children) = children_map.get(&pid) {
-        for &child in children {
-            if result.insert(child) {
-                collect_descendants(child, children_map, result);
-            }
-        }
-    }
 }
 
 /// Check if a process is orphaned (PPID=1, reparented to init/launchd).

@@ -199,7 +199,7 @@ Every config option can be overridden via environment variables. Values outside 
 
 | Command | Description |
 |---------|-------------|
-| `start [-f\|--foreground]` | Start the daemon |
+| `start [-f\|--foreground] [-d\|--dry-run]` | Start the daemon. With `--dry-run`, scan and log without killing. |
 | `stop` | Stop the daemon |
 | `status` | Show daemon status (systemctl-style with uptime) |
 | `scan [-w\|--watch SECS]` | Detect orphaned processes (safe, no killing). With `--watch`, continuously scan at interval. |
@@ -248,7 +248,7 @@ When the daemon kills orphaned processes, it sends a macOS notification via Noti
 
 ### Cleanup Statistics
 
-Every cleanup action is recorded to `~/.proc-janitor/stats.jsonl` as append-only JSON Lines. Each entry includes a timestamp, the number of processes cleaned, and details of each kill (PID, name, signal used, success/failure).
+Every cleanup action is recorded to `~/.proc-janitor/stats.jsonl` as append-only JSON Lines. Each entry includes a timestamp, the number of processes cleaned, and details of each kill (PID, name, signal used, success/failure). The file is automatically rotated (to `stats.jsonl.old`) when it exceeds 5 MB.
 
 ## macOS LaunchAgent
 

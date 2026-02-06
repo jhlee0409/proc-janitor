@@ -116,11 +116,7 @@ fn matches_patterns(text: &str, patterns: &[Regex]) -> bool {
 }
 
 /// Recursively collect all descendant PIDs of a given process
-fn collect_orphan_tree(
-    pid: u32,
-    children: &HashMap<u32, Vec<u32>>,
-    result: &mut HashSet<u32>,
-) {
+fn collect_orphan_tree(pid: u32, children: &HashMap<u32, Vec<u32>>, result: &mut HashSet<u32>) {
     if let Some(child_pids) = children.get(&pid) {
         for &child in child_pids {
             if result.insert(child) {
@@ -138,6 +134,7 @@ fn collect_orphan_tree(
 pub fn print_tree(filter_targets: bool) -> Result<()> {
     let config = Config::load()?;
     let nodes = build_process_tree(&config)?;
+    let color = use_color();
 
     // Find root processes (PPID=0 or PPID=1 or parent not in our list)
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -169,59 +166,141 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
         .iter()
         .filter(|n| orphan_tree_pids.contains(&n.pid))
         .collect();
+    let total_reclaimable: f64 = orphan_targets.iter().map(|n| n.memory_mb).sum();
 
-    let stats_line = format!(
-        "  Total: {}  |  Targets: {}  |  Orphan Targets: {} (cleanable)",
-        total,
-        targets.len(),
-        orphan_targets.len()
-    );
-    let box_width = 78;
-    let title = "proc-janitor Process Tree";
-    let title_pad = (box_width - 2 - title.len()) / 2;
-    println!("{}", "=".repeat(box_width));
-    println!(
-        "|{}{}{}|",
-        " ".repeat(title_pad),
-        title,
-        " ".repeat(box_width - 2 - title_pad - title.len())
-    );
-    println!("{}", "=".repeat(box_width));
-    let stats_pad = box_width - 2 - stats_line.len();
-    if stats_pad > 0 {
-        println!("|{}{}|", stats_line, " ".repeat(stats_pad));
+    // Header
+    println!();
+    if color {
+        println!("  {} {}", "proc-janitor".bold(), "Process Tree".dimmed());
     } else {
-        println!("| {stats_line} |");
+        println!("  proc-janitor Process Tree");
     }
-    println!("{}", "=".repeat(box_width));
+    println!("  {}", "─".repeat(50));
+
+    // Stats
+    if color {
+        print!("  {} {}", format!("{total}").bold(), "processes".dimmed());
+        if !targets.is_empty() {
+            print!(
+                "  {}  {} {}",
+                "│".dimmed(),
+                format!("{}", targets.len()).yellow().bold(),
+                "targets".dimmed()
+            );
+        }
+        if !orphan_targets.is_empty() {
+            print!(
+                "  {}  {} {}",
+                "│".dimmed(),
+                format!("{}", orphan_targets.len()).red().bold(),
+                "cleanable".dimmed()
+            );
+            print!(
+                "  {}  {} {}",
+                "│".dimmed(),
+                format!("{:.0}MB", total_reclaimable).red(),
+                "reclaimable".dimmed()
+            );
+        }
+        println!();
+    } else {
+        print!("  {total} processes");
+        if !targets.is_empty() {
+            print!("  |  {} targets", targets.len());
+        }
+        if !orphan_targets.is_empty() {
+            print!(
+                "  |  {} cleanable  |  {:.0}MB reclaimable",
+                orphan_targets.len(),
+                total_reclaimable
+            );
+        }
+        println!();
+    }
     println!();
 
     // Legend
-    println!("Legend: 🎯 Target  ⛔ Whitelisted  👻 Orphan (PPID=1)  📎 Tracked Session");
+    if color {
+        println!(
+            "  {}  {}  {}  {}",
+            "🎯 target".dimmed(),
+            "⛔ whitelisted".dimmed(),
+            "👻 orphan".dimmed(),
+            "📎 session".dimmed()
+        );
+    } else {
+        println!("  🎯 target  ⛔ whitelisted  👻 orphan  📎 session");
+    }
     println!();
 
     if filter_targets {
-        // Only show target processes and their ancestors
-        println!("── Showing target processes only ──");
-        println!();
-        for node in &targets {
-            print_node(node, "");
+        if targets.is_empty() {
+            if color {
+                println!("  {}", "No target processes found.".dimmed());
+                println!(
+                    "  {}",
+                    "Configure targets: proc-janitor config init".dimmed()
+                );
+            } else {
+                println!("  No target processes found.");
+                println!("  Configure targets: proc-janitor config init");
+            }
+        } else {
+            if color {
+                println!("  {}", "Showing target processes only".dimmed());
+            } else {
+                println!("  Showing target processes only");
+            }
+            println!();
+            for node in &targets {
+                print_node(node, "  ", color);
+            }
         }
     } else {
         // Show process tree starting from init (PID 1)
         if let Some(init_children) = children.get(&1) {
-            println!("init (PID 1)");
-            let len = init_children.len();
-            for (i, &pid) in init_children.iter().enumerate() {
-                if let Some(node) = nodes.get(&pid) {
-                    // Skip non-interesting processes unless they're targets
-                    if (!node.is_target || node.is_whitelisted)
-                        && !has_target_descendant(pid, &children, &nodes, &mut HashSet::new())
-                    {
-                        continue;
+            if color {
+                println!("  {}", "init (PID 1)".dimmed());
+            } else {
+                println!("  init (PID 1)");
+            }
+            let interesting: Vec<_> = init_children
+                .iter()
+                .filter(|&&pid| {
+                    nodes
+                        .get(&pid)
+                        .map(|n| n.is_target && !n.is_whitelisted)
+                        .unwrap_or(false)
+                        || has_target_descendant(pid, &children, &nodes, &mut HashSet::new())
+                })
+                .collect();
+
+            if interesting.is_empty() {
+                if color {
+                    println!("  {}", "  No target processes in tree.".dimmed());
+                    println!(
+                        "  {}",
+                        "  Configure targets: proc-janitor config init".dimmed()
+                    );
+                } else {
+                    println!("    No target processes in tree.");
+                    println!("    Configure targets: proc-janitor config init");
+                }
+            } else {
+                let len = interesting.len();
+                for (i, &&pid) in interesting.iter().enumerate() {
+                    if let Some(node) = nodes.get(&pid) {
+                        let is_last = i == len - 1;
+                        print_subtree(
+                            node,
+                            "  ",
+                            is_last,
+                            &children,
+                            &nodes,
+                            &mut HashSet::new(),
+                            color,
+                        );
                     }
-                    let is_last = i == len - 1;
-                    print_subtree(node, "", is_last, &children, &nodes, &mut HashSet::new());
                 }
             }
         }
@@ -230,27 +309,39 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
     // Summary of cleanable processes
     if !orphan_targets.is_empty() {
         println!();
-        let box_width = 78;
-        println!("┌{}┐", "─".repeat(box_width - 2));
-        let title = " Cleanable Orphan Processes";
-        let title_pad = box_width - 2 - title.chars().count();
-        println!("│{}{}│", title, " ".repeat(title_pad));
-        println!("├{}┤", "─".repeat(box_width - 2));
-        for node in orphan_targets {
-            let line = format!(
-                "  PID {:>6}  {:>6.1} MB  {}",
-                node.pid,
-                node.memory_mb,
-                truncate(&node.name, 50)
-            );
-            let line_pad = box_width - 2 - line.chars().count();
-            println!("│{}{}│", line, " ".repeat(line_pad));
+        if color {
+            println!("  {} {}", "Cleanable".red().bold(), "─".repeat(41).dimmed());
+        } else {
+            println!("  Cleanable ─────────────────────────────────");
         }
-        println!("└{}┘", "─".repeat(box_width - 2));
+        for node in &orphan_targets {
+            if color {
+                println!(
+                    "  {} {:>6.1} MB  {}",
+                    format!("PID {:>6}", node.pid).dimmed(),
+                    node.memory_mb,
+                    node.name.red()
+                );
+            } else {
+                println!(
+                    "  PID {:>6}  {:>6.1} MB  {}",
+                    node.pid, node.memory_mb, node.name
+                );
+            }
+        }
         println!();
-        println!("Run `proc-janitor clean` to terminate these processes.");
+        if color {
+            println!(
+                "  {} {}",
+                "→".green(),
+                "Run `proc-janitor clean` to terminate".dimmed()
+            );
+        } else {
+            println!("  → Run `proc-janitor clean` to terminate");
+        }
     }
 
+    println!();
     Ok(())
 }
 
@@ -285,14 +376,25 @@ fn print_subtree(
     children: &HashMap<u32, Vec<u32>>,
     nodes: &HashMap<u32, ProcessNode>,
     visited: &mut HashSet<u32>,
+    color: bool,
 ) {
     if !visited.insert(node.pid) {
         return; // Already visited, cycle detected
     }
-    let connector = if is_last { "└── " } else { "├── " };
-    print_node(node, &format!("{prefix}{connector}"));
+    let (connector, ext) = if is_last {
+        ("└─ ", "   ")
+    } else {
+        ("├─ ", "│  ")
+    };
 
-    let new_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+    if color {
+        print!("{}", format!("{prefix}{connector}").dimmed());
+    } else {
+        print!("{prefix}{connector}");
+    }
+    print_node(node, "", color);
+
+    let new_prefix = format!("{prefix}{ext}");
 
     if let Some(child_pids) = children.get(&node.pid) {
         let interesting_children: Vec<_> = child_pids
@@ -310,98 +412,71 @@ fn print_subtree(
         for (i, &&pid) in interesting_children.iter().enumerate() {
             if let Some(child_node) = nodes.get(&pid) {
                 let is_last = i == len - 1;
-                print_subtree(child_node, &new_prefix, is_last, children, nodes, visited);
+                print_subtree(
+                    child_node,
+                    &new_prefix,
+                    is_last,
+                    children,
+                    nodes,
+                    visited,
+                    color,
+                );
             }
         }
     }
 }
 
-fn print_node(node: &ProcessNode, prefix: &str) {
+fn print_node(node: &ProcessNode, prefix: &str, color: bool) {
     let mut markers = String::new();
     if node.is_target && !node.is_whitelisted {
-        markers.push('🎯');
+        markers.push_str(" 🎯");
     }
     if node.is_whitelisted {
-        markers.push('⛔');
+        markers.push_str(" ⛔");
     }
     if node.is_orphan {
-        markers.push('👻');
+        markers.push_str(" 👻");
     }
     if node.session_id.is_some() {
-        markers.push('📎');
+        markers.push_str(" 📎");
     }
 
-    let mem_str = if use_color() {
+    let mem_str = if color {
         if node.memory_mb > 100.0 {
             format!("{:>6.1}MB", node.memory_mb).red().to_string()
         } else if node.memory_mb > 50.0 {
             format!("{:>6.1}MB", node.memory_mb).yellow().to_string()
         } else {
-            format!("{:>6.1}MB", node.memory_mb)
+            format!("{:>6.1}MB", node.memory_mb).dimmed().to_string()
         }
     } else {
         format!("{:>6.1}MB", node.memory_mb)
     };
 
-    let name_colored = if use_color() && node.is_target && !node.is_whitelisted {
-        if node.is_orphan {
-            node.name.red().to_string()
-        } else {
+    let name_str = if color {
+        if node.is_target && !node.is_whitelisted && node.is_orphan {
+            node.name.red().bold().to_string()
+        } else if node.is_target && !node.is_whitelisted {
             node.name.yellow().to_string()
+        } else {
+            node.name.dimmed().to_string()
         }
     } else {
         node.name.clone()
     };
 
-    println!(
-        "{}{} [{}] {} {}",
-        prefix, name_colored, node.pid, mem_str, markers
-    );
-}
-
-fn truncate(s: &str, max_len: usize) -> String {
-    if max_len < 4 {
-        return s.chars().take(max_len).collect();
-    }
-    if s.chars().count() > max_len {
-        format!("{}...", s.chars().take(max_len - 3).collect::<String>())
+    let pid_str = if color {
+        format!("{}", node.pid).dimmed().to_string()
     } else {
-        s.to_string()
-    }
+        format!("{}", node.pid)
+    };
+
+    println!("{prefix}{name_str} {pid_str} {mem_str}{markers}");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_truncate_short_string() {
-        assert_eq!(truncate("hello", 10), "hello");
-        assert_eq!(truncate("hello", 5), "hello");
-    }
-
-    #[test]
-    fn test_truncate_long_string() {
-        assert_eq!(truncate("hello world!", 8), "hello...");
-        assert_eq!(truncate("abcdefghij", 7), "abcd...");
-    }
-
-    #[test]
-    fn test_truncate_very_short_max() {
-        assert_eq!(truncate("hello", 3), "hel");
-        assert_eq!(truncate("hello", 1), "h");
-    }
-
-    #[test]
-    fn test_truncate_exact_length() {
-        assert_eq!(truncate("hello", 5), "hello");
-    }
-
-    #[test]
-    fn test_truncate_unicode() {
-        // Unicode characters should be counted correctly
-        assert_eq!(truncate("한글테스트입니다", 5), "한글...");
-    }
 
     #[test]
     fn test_matches_patterns_basic() {

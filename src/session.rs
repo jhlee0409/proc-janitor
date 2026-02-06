@@ -716,7 +716,12 @@ mod tests {
 
     #[test]
     fn test_register_rejects_special_chars_in_name() {
-        let result = super::register(None, Some("<script>alert</script>".to_string()), "claude".to_string(), None);
+        let result = super::register(
+            None,
+            Some("<script>alert</script>".to_string()),
+            "claude".to_string(),
+            None,
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("alphanumeric"));
     }

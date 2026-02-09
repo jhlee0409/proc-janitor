@@ -107,13 +107,16 @@ impl Daemon {
 
         self.running.store(true, Ordering::SeqCst);
 
-        // Setup signal handlers
+        // Setup signal handlers with double-signal guard
         let running = Arc::clone(&self.running);
         let condvar = Arc::clone(&self.condvar);
+        let shutdown_initiated = Arc::new(AtomicBool::new(false));
+        let shutdown_flag = Arc::clone(&shutdown_initiated);
         ctrlc::set_handler(move || {
-            // Use eprintln instead of println for signal handler safety
-            // (ctrlc crate runs handler in a dedicated thread on most platforms,
-            // but we avoid stdout which may be captured/redirected by launchd)
+            // Prevent double-shutdown from repeated signals
+            if shutdown_flag.swap(true, Ordering::SeqCst) {
+                return;
+            }
             eprintln!("Received termination signal, shutting down gracefully...");
             running.store(false, Ordering::SeqCst);
             // Wake up the daemon immediately
@@ -261,6 +264,100 @@ fn record_cleanup_stats(results: &[crate::cleaner::CleanResult]) {
             let _ = writeln!(file, "{line}");
         }
     }
+}
+
+/// Get stats file path
+fn get_stats_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".proc-janitor").join("stats.jsonl"))
+}
+
+/// Show cleanup statistics summary
+pub fn show_stats(days: u64, json: bool) -> Result<()> {
+    let stats_path = get_stats_path().ok_or_else(|| anyhow::anyhow!("HOME not found"))?;
+    if !stats_path.exists() {
+        if json {
+            println!("{{\"total_cleaned\":0,\"total_failed\":0,\"events\":0}}");
+        } else {
+            println!("No cleanup statistics found.");
+            println!("Stats are recorded when the daemon cleans orphaned processes.");
+        }
+        return Ok(());
+    }
+
+    let cutoff = chrono::Local::now() - chrono::Duration::days(days as i64);
+    let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+    let file = std::io::BufReader::new(fs::File::open(&stats_path)?);
+    use std::io::BufRead;
+
+    let mut total_cleaned: usize = 0;
+    let mut total_failed: usize = 0;
+    let mut event_count: usize = 0;
+    let mut process_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for line in file.lines().map_while(Result::ok) {
+        if let Ok(event) = serde_json::from_str::<CleanupEvent>(&line) {
+            if event.timestamp < cutoff_str {
+                continue;
+            }
+            event_count += 1;
+            total_cleaned += event.cleaned;
+            total_failed += event.failed;
+            for proc_name in &event.processes {
+                // Extract just the name (before " (PID")
+                let name = proc_name
+                    .split(" (PID")
+                    .next()
+                    .unwrap_or(proc_name)
+                    .to_string();
+                *process_counts.entry(name).or_default() += 1;
+            }
+        }
+    }
+
+    if json {
+        let mut top: Vec<_> = process_counts.iter().collect();
+        top.sort_by(|a, b| b.1.cmp(a.1));
+        let top_procs: Vec<_> = top
+            .iter()
+            .take(10)
+            .map(|(k, v)| serde_json::json!({"name": k, "count": v}))
+            .collect();
+        let output = serde_json::json!({
+            "days": days,
+            "events": event_count,
+            "total_cleaned": total_cleaned,
+            "total_failed": total_failed,
+            "top_processes": top_procs,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        let use_color = crate::util::use_color();
+        if use_color {
+            println!(
+                "{}",
+                format!("Cleanup Statistics (Last {days} Days)").bold()
+            );
+        } else {
+            println!("Cleanup Statistics (Last {days} Days)");
+        }
+        println!("{}", "=".repeat(36));
+        println!("  Events: {event_count}");
+        println!("  Processes cleaned: {total_cleaned}");
+        println!("  Failed kills: {total_failed}");
+
+        if !process_counts.is_empty() {
+            let mut top: Vec<_> = process_counts.iter().collect();
+            top.sort_by(|a, b| b.1.cmp(a.1));
+            println!("  Most cleaned:");
+            for (name, count) in top.iter().take(5) {
+                println!("    {name}: {count}");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Get the PID file path
@@ -529,6 +626,38 @@ pub fn stop() -> Result<()> {
     } else {
         bail!("Daemon is not running (no PID file found)");
     }
+}
+
+/// Send SIGHUP to daemon to trigger config reload
+pub fn reload() -> Result<()> {
+    if let Some(pid) = get_daemon_pid() {
+        if !is_daemon_running() {
+            bail!("Daemon is not running (stale PID file)");
+        }
+
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid as NixPid;
+
+        let nix_pid = NixPid::from_raw(i32::try_from(pid).context("PID exceeds i32 range")?);
+        kill(nix_pid, Signal::SIGHUP)
+            .with_context(|| format!("Failed to send SIGHUP to daemon (PID: {pid})"))?;
+
+        println!("Sent SIGHUP to daemon (PID: {pid}). Config will be reloaded on next scan cycle.");
+        Ok(())
+    } else {
+        bail!("Daemon is not running (no PID file found)");
+    }
+}
+
+/// Restart the daemon (stop then start)
+pub fn restart(foreground: bool, dry_run: bool) -> Result<()> {
+    // Stop if running
+    if is_daemon_running() {
+        stop()?;
+        // Brief wait for clean shutdown
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    start(foreground, dry_run)
 }
 
 /// Get daemon uptime as (raw_seconds, human-readable string)

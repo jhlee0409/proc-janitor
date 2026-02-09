@@ -253,3 +253,98 @@ fn test_clean_quiet_mode() {
 
     assert!(output.status.success());
 }
+
+#[test]
+fn test_restart_when_not_running() {
+    // Restart when daemon isn't running should just start (or fail gracefully)
+    let output = Command::new(binary_path())
+        .args(["restart", "--foreground", "--dry-run"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to start");
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    unsafe {
+        libc::kill(output.id() as i32, libc::SIGTERM);
+    }
+    let result = output.wait_with_output().expect("Failed to wait");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        combined.contains("Restart") || combined.contains("DRY-RUN") || combined.contains("Daemon"),
+        "Expected restart output, got: {combined}"
+    );
+}
+
+#[test]
+fn test_reload_when_not_running() {
+    let output = Command::new(binary_path())
+        .arg("reload")
+        .output()
+        .expect("Failed to execute command");
+
+    // Should fail gracefully when daemon not running
+    assert!(
+        !output.status.success() || {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            stderr.contains("not running")
+        }
+    );
+}
+
+#[test]
+fn test_stats_command() {
+    let output = Command::new(binary_path())
+        .args(["stats", "--days", "7"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Either shows stats or "No cleanup statistics"
+    assert!(
+        stdout.contains("Statistics") || stdout.contains("No cleanup"),
+        "Expected stats output, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_stats_json() {
+    let output = Command::new(binary_path())
+        .args(["--json", "stats"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should be valid JSON
+    let _: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|_| panic!("Expected valid JSON, got: {stdout}"));
+}
+
+#[test]
+fn test_clean_min_age() {
+    let output = Command::new(binary_path())
+        .args(["clean", "--min-age", "999999"])
+        .output()
+        .expect("Failed to execute command");
+
+    // With min_age very high, nothing should be cleaned
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_tree_with_pattern() {
+    let output = Command::new(binary_path())
+        .args(["tree", "--pattern", "nonexistent_xyz"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("No processes matching") || stdout.contains("nonexistent_xyz"));
+}

@@ -523,18 +523,20 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
 
     for id in &stale_ids {
         if let Some(session) = store.sessions.get(id) {
+            // Always discover PIDs to show in both dry-run and real mode
+            let root_pids: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
+            let pids_to_clean = find_descendant_pids(&sys, &root_pids);
+
             println!(
-                "  {} ({}) - {} tracked PIDs",
+                "  {} ({}) - {} tracked, {} descendant PIDs: {:?}",
                 id,
                 session.source,
-                session.pids.len()
+                session.pids.len(),
+                pids_to_clean.len(),
+                pids_to_clean
             );
 
             if !dry_run {
-                // Kill descendant processes
-                let root_pids: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
-                let pids_to_clean = find_descendant_pids(&sys, &root_pids);
-
                 // Build start_time map: live start_times for all PIDs, then override
                 // with stored start_times for tracked root PIDs (PID reuse protection for descendants)
                 let mut start_time_map: HashMap<u32, Option<u64>> = HashMap::new();

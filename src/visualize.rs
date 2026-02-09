@@ -131,10 +131,16 @@ fn collect_orphan_tree(pid: u32, children: &HashMap<u32, Vec<u32>>, result: &mut
 // ============================================================================
 
 /// Print ASCII process tree
-pub fn print_tree(filter_targets: bool) -> Result<()> {
+pub fn print_tree(filter_targets: bool, pattern: Option<&str>) -> Result<()> {
     let config = Config::load()?;
     let nodes = build_process_tree(&config)?;
     let color = use_color();
+
+    // Optional pattern filter
+    let pattern_re = pattern
+        .map(Regex::new)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("Invalid tree filter pattern: {e}"))?;
 
     // Find root processes (PPID=0 or PPID=1 or parent not in our list)
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -233,7 +239,29 @@ pub fn print_tree(filter_targets: bool) -> Result<()> {
     }
     println!();
 
-    if filter_targets {
+    if let Some(ref re) = pattern_re {
+        // Pattern filter mode: show only processes matching the regex
+        let matched: Vec<_> = nodes
+            .values()
+            .filter(|n| re.is_match(&n.name) || re.is_match(&n.cmdline))
+            .collect();
+        if matched.is_empty() {
+            println!(
+                "  No processes matching pattern '{}'.",
+                pattern.unwrap_or("")
+            );
+        } else {
+            println!(
+                "  Showing {} process(es) matching '{}'",
+                matched.len(),
+                pattern.unwrap_or("")
+            );
+            println!();
+            for node in &matched {
+                print_node(node, "  ", color);
+            }
+        }
+    } else if filter_targets {
         if targets.is_empty() {
             if color {
                 println!("  {}", "No target processes found.".dimmed());

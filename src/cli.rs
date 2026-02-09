@@ -36,6 +36,20 @@ pub enum Commands {
     /// Stop the daemon
     Stop,
 
+    /// Restart the daemon (stop + start)
+    Restart {
+        /// Run in foreground (don't daemonize)
+        #[arg(long, short = 'f')]
+        foreground: bool,
+
+        /// Dry-run mode: scan and log what would be killed, but don't send signals
+        #[arg(long, short = 'd')]
+        dry_run: bool,
+    },
+
+    /// Reload daemon configuration (send SIGHUP)
+    Reload,
+
     /// Show daemon status
     Status,
 
@@ -59,6 +73,10 @@ pub enum Commands {
         /// Confirm before killing each process
         #[arg(long, short = 'i')]
         interactive: bool,
+
+        /// Only clean processes older than N seconds
+        #[arg(long)]
+        min_age: Option<u64>,
     },
 
     /// Show process tree visualization
@@ -66,6 +84,10 @@ pub enum Commands {
         /// Only show target processes
         #[arg(short, long)]
         targets_only: bool,
+
+        /// Filter tree by regex pattern
+        #[arg(long, short = 'm')]
+        pattern: Option<String>,
     },
 
     /// Configuration management
@@ -92,6 +114,13 @@ pub enum Commands {
         /// Shell to generate completions for (bash, zsh, fish, powershell)
         #[arg(value_enum)]
         shell: clap_complete::Shell,
+    },
+
+    /// Show cleanup statistics from stats.jsonl
+    Stats {
+        /// Only show stats from the last N days
+        #[arg(long, default_value = "7")]
+        days: u64,
     },
 
     /// Show version and build information

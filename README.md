@@ -110,6 +110,9 @@ proc-janitor clean --pid 12345 67890
 # Kill only orphans matching a pattern
 proc-janitor clean --pattern "node.*mcp"
 
+# Kill only orphans older than 5 minutes
+proc-janitor clean --min-age 300
+
 # Interactive mode: confirm each kill
 proc-janitor clean --interactive
 
@@ -121,6 +124,19 @@ proc-janitor status
 
 # Stop the daemon
 proc-janitor stop
+
+# Restart the daemon (stop + start)
+proc-janitor restart
+
+# Reload config without restart (send SIGHUP)
+proc-janitor reload
+
+# View cleanup statistics (last 7 days)
+proc-janitor stats
+proc-janitor stats --days 30
+
+# View process tree filtered by pattern
+proc-janitor tree --pattern "node"
 
 # Diagnose issues
 proc-janitor doctor
@@ -192,7 +208,7 @@ Every config option can be overridden via environment variables. Values outside 
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--json` | `-j` | Output results in JSON format (supported by: `status`, `config show`, `scan`, `clean`) |
+| `--json` | `-j` | Output results in JSON format (supported by: `status`, `config show`, `scan`, `clean`, `stats`) |
 | `--quiet` | `-q` | Suppress non-essential output (hints, spinners). Useful for scripts and cron jobs. |
 
 ### Core Commands
@@ -203,8 +219,11 @@ Every config option can be overridden via environment variables. Values outside 
 | `stop` | Stop the daemon |
 | `status` | Show daemon status (systemctl-style with uptime) |
 | `scan [-w\|--watch SECS]` | Detect orphaned processes (safe, no killing). With `--watch`, continuously scan at interval. |
-| `clean [--pid PIDs] [--pattern REGEX] [-i\|--interactive]` | Kill orphaned target processes (all by default, or filter by PID/pattern). With `-i`, confirm each kill. |
-| `tree [-t\|--targets-only]` | Visualize process tree |
+| `clean [--pid PIDs] [--pattern REGEX] [-i\|--interactive] [--min-age SECS]` | Kill orphaned target processes (all by default, or filter by PID/pattern/age). With `-i`, confirm each kill. |
+| `restart [-f\|--foreground] [-d\|--dry-run]` | Restart the daemon (stop + start) |
+| `reload` | Reload daemon configuration (sends SIGHUP, no restart needed) |
+| `stats [--days N]` | Show cleanup statistics from the last N days (default: 7). Supports `--json`. |
+| `tree [-t\|--targets-only] [-m\|--pattern REGEX]` | Visualize process tree (optionally filter by regex pattern) |
 | `logs [-f\|--follow] [-n N]` | View logs (N: 1–10000, default 50) |
 | `version` | Show version and build information |
 | `doctor` | Diagnose common issues and check system health |

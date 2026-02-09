@@ -39,6 +39,18 @@ fn run() -> Result<()> {
             daemon::stop()?;
         }
 
+        Commands::Restart {
+            foreground,
+            dry_run,
+        } => {
+            println!("Restarting proc-janitor daemon...");
+            daemon::restart(foreground, dry_run)?;
+        }
+
+        Commands::Reload => {
+            daemon::reload()?;
+        }
+
         Commands::Status => {
             daemon::status(cli.json)?;
         }
@@ -135,11 +147,12 @@ fn run() -> Result<()> {
             pid,
             pattern,
             interactive,
+            min_age,
         } => {
             let result = if interactive {
-                cleaner::clean_interactive(&pid, pattern.as_deref())?
+                cleaner::clean_interactive(&pid, pattern.as_deref(), min_age)?
             } else {
-                cleaner::clean_filtered(&pid, pattern.as_deref())?
+                cleaner::clean_filtered(&pid, pattern.as_deref(), min_age)?
             };
 
             if cli.json {
@@ -205,8 +218,11 @@ fn run() -> Result<()> {
             }
         }
 
-        Commands::Tree { targets_only } => {
-            visualize::print_tree(targets_only)?;
+        Commands::Tree {
+            targets_only,
+            pattern,
+        } => {
+            visualize::print_tree(targets_only, pattern.as_deref())?;
         }
 
         Commands::Config(config_cmd) => match config_cmd {
@@ -275,6 +291,10 @@ fn run() -> Result<()> {
                 session::auto_clean(dry_run)?;
             }
         },
+
+        Commands::Stats { days } => {
+            daemon::show_stats(days, cli.json)?;
+        }
 
         Commands::Version => {
             println!("proc-janitor {}", env!("CARGO_PKG_VERSION"));

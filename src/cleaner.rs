@@ -142,7 +142,11 @@ pub fn clean_all(
 /// - If `pattern` is provided: only kill orphans whose cmdline matches the regex.
 /// - If both: intersection (PID must be in list AND cmdline must match).
 /// - If neither: kill all detected orphans.
-pub fn clean_filtered(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummary> {
+pub fn clean_filtered(
+    pids: &[u32],
+    pattern: Option<&str>,
+    min_age: Option<u64>,
+) -> Result<CleanSummary> {
     let mut config = Config::load()?;
     let sigterm_timeout = config.sigterm_timeout;
     let targets_configured = !config.targets.is_empty();
@@ -170,7 +174,8 @@ pub fn clean_filtered(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummar
             let pattern_ok = pattern_re
                 .as_ref()
                 .map_or(true, |re| re.is_match(&o.cmdline));
-            pid_ok && pattern_ok
+            let age_ok = min_age.is_none_or(|age| o.uptime_seconds >= age);
+            pid_ok && pattern_ok && age_ok
         })
         .collect();
 
@@ -184,7 +189,7 @@ pub fn clean_filtered(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummar
     };
 
     // Warn when filters were specified but nothing matched
-    let has_filters = !pids.is_empty() || pattern.is_some();
+    let has_filters = !pids.is_empty() || pattern.is_some() || min_age.is_some();
     if has_filters && to_clean.is_empty() && !orphans.is_empty() {
         eprintln!(
             "Warning: Found {} orphan(s) but none matched your filters.",
@@ -205,7 +210,11 @@ pub fn clean_filtered(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummar
 }
 
 /// Clean orphaned processes with interactive confirmation per process.
-pub fn clean_interactive(pids: &[u32], pattern: Option<&str>) -> Result<CleanSummary> {
+pub fn clean_interactive(
+    pids: &[u32],
+    pattern: Option<&str>,
+    min_age: Option<u64>,
+) -> Result<CleanSummary> {
     let mut config = Config::load()?;
     let sigterm_timeout = config.sigterm_timeout;
     let targets_configured = !config.targets.is_empty();
@@ -232,7 +241,8 @@ pub fn clean_interactive(pids: &[u32], pattern: Option<&str>) -> Result<CleanSum
             let pattern_ok = pattern_re
                 .as_ref()
                 .map_or(true, |re| re.is_match(&o.cmdline));
-            pid_ok && pattern_ok
+            let age_ok = min_age.is_none_or(|age| o.uptime_seconds >= age);
+            pid_ok && pattern_ok && age_ok
         })
         .collect();
 

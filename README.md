@@ -3,10 +3,11 @@
 > Automatic orphan process cleanup daemon for macOS (Linux experimental)
 
 [![CI](https://github.com/jhlee0409/proc-janitor/actions/workflows/ci.yml/badge.svg)](https://github.com/jhlee0409/proc-janitor/actions/workflows/ci.yml)
+[![Release](https://github.com/jhlee0409/proc-janitor/actions/workflows/release.yml/badge.svg)](https://github.com/jhlee0409/proc-janitor/releases)
 [![crates.io](https://img.shields.io/crates/v/proc-janitor.svg)](https://crates.io/crates/proc-janitor)
 [![Downloads](https://img.shields.io/crates/d/proc-janitor.svg)](https://crates.io/crates/proc-janitor)
+[![GitHub Release](https://img.shields.io/github/v/release/jhlee0409/proc-janitor)](https://github.com/jhlee0409/proc-janitor/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
 **proc-janitor** detects and terminates orphaned processes that linger after their parent terminal or application exits. No more zombie Node.js instances eating up your RAM.
 
@@ -37,11 +38,39 @@ Every 5 seconds (configurable):
 
 ## Installation
 
+### Quick Install (Recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jhlee0409/proc-janitor/main/scripts/install-binary.sh | sh
+```
+
+Downloads the latest pre-built binary for your platform (macOS/Linux, x86_64/ARM64) and installs it to `/usr/local/bin`.
+
+### Homebrew (macOS/Linux)
+
+```bash
+brew install jhlee0409/tap/proc-janitor
+
+# Start as a background service
+brew services start proc-janitor
+```
+
 ### From crates.io
 
 ```bash
 cargo install proc-janitor
 ```
+
+### GitHub Releases
+
+Pre-built binaries for every release are available on the [Releases page](https://github.com/jhlee0409/proc-janitor/releases/latest). Download the archive for your platform, extract, and place `proc-janitor` in your PATH.
+
+| Platform | Architecture | Download |
+|----------|-------------|----------|
+| macOS | Apple Silicon (M1/M2/M3/M4) | `proc-janitor-v*-aarch64-apple-darwin.tar.gz` |
+| macOS | Intel | `proc-janitor-v*-x86_64-apple-darwin.tar.gz` |
+| Linux | x86_64 | `proc-janitor-v*-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux | ARM64 | `proc-janitor-v*-aarch64-unknown-linux-gnu.tar.gz` |
 
 ### Build from Source
 
@@ -49,12 +78,10 @@ cargo install proc-janitor
 git clone https://github.com/jhlee0409/proc-janitor.git
 cd proc-janitor
 cargo build --release
-
-# Copy binary to PATH
 sudo cp target/release/proc-janitor /usr/local/bin/
 ```
 
-### One-Line Install (macOS)
+### macOS Full Setup (LaunchAgent)
 
 ```bash
 git clone https://github.com/jhlee0409/proc-janitor.git
@@ -63,30 +90,22 @@ cd proc-janitor && bash scripts/install.sh
 
 This builds the binary, installs it, creates a default config, and sets up a macOS LaunchAgent for auto-start on login.
 
-### Homebrew (macOS)
-
-```bash
-brew tap jhlee0409/proc-janitor
-brew install proc-janitor
-brew services start proc-janitor
-```
-
-### Uninstall
-
-```bash
-# Via install script
-bash scripts/uninstall.sh
-
-# Or via Homebrew
-brew uninstall proc-janitor
-```
-
 ### Linux (systemd)
 
 ```bash
 cargo install proc-janitor
 sudo cp resources/proc-janitor.service /etc/systemd/user/
 systemctl --user enable --now proc-janitor
+```
+
+### Uninstall
+
+```bash
+# If installed via install.sh
+bash scripts/install.sh --uninstall
+
+# If installed via Homebrew
+brew uninstall proc-janitor
 ```
 
 ## Quick Start

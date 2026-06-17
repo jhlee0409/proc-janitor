@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-06-17
+
+Follow-up to the 0.8.2 audit fixes — closes the remaining medium/low items.
+
+### Added
+- **Container safety guard.** `clean` and the daemon refuse to act inside a
+  container (where every process has PPID=1, so orphan detection is meaningless
+  and would target the container's own workload). Override with
+  `PROC_JANITOR_ALLOW_CONTAINER=1`. `scan` and `clean --dry-run` are unaffected.
+- `--json` output for `version` and `session list`.
+- Declared MSRV (`rust-version = "1.82"`).
+
+### Fixed
+- **proc-janitor refuses to kill its own process.** A daemonized instance has
+  PPID=1, so a broad target pattern (e.g. matching `proc-janitor` or `.*`) could
+  previously make the daemon SIGKILL itself.
+- **`stats` no longer loses history on rotation.** It now reads both
+  `stats.jsonl` and `stats.jsonl.old`, and timestamps are stored/compared as
+  RFC3339 (timezone/DST-safe; legacy timestamps still parsed). Rotation is logged.
+- `session track` warns when the PID isn't found (so PID-reuse protection is
+  knowingly disabled for it) instead of silently recording it without a start_time.
+- Config files missing keys now load with sensible defaults (`#[serde(default)]`)
+  instead of failing to parse — protects existing configs from future fields.
+
+### Changed
+- CI and release builds use `--locked` for reproducibility.
+- Removed the stale in-repo `Formula/proc-janitor.rb`; the Homebrew tap is the
+  single source of truth.
+- `scripts/uninstall.sh` is now a standalone, install-method-agnostic
+  uninstaller (LaunchAgent, Homebrew `brew services`, Linux systemd `--user`,
+  and the binary), replacing the previous macOS-only delegation to `install.sh`.
+
 ## [0.8.2] - 2026-06-17
 
 User-perspective audit fixes. The low-level kill safety (system-PID guard,

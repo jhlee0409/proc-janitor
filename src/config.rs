@@ -7,21 +7,68 @@ use std::path::PathBuf;
 
 use crate::util::use_color;
 
+// Field defaults so that a config file missing keys (e.g. written by an older
+// version, or hand-edited) still loads instead of failing to parse. Without
+// these, adding a field in a future release would break every existing config.
+fn default_scan_interval() -> u64 {
+    5
+}
+fn default_grace_period() -> u64 {
+    30
+}
+fn default_sigterm_timeout() -> u64 {
+    5
+}
+fn default_log_enabled() -> bool {
+    true
+}
+fn default_retention_days() -> u32 {
+    7
+}
+fn default_log_path() -> String {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".proc-janitor")
+        .join("logs")
+        .to_string_lossy()
+        .to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_scan_interval")]
     pub scan_interval: u64,
+    #[serde(default = "default_grace_period")]
     pub grace_period: u64,
+    #[serde(default = "default_sigterm_timeout")]
     pub sigterm_timeout: u64,
+    // Missing targets => empty => safe no-op (see Config::load).
+    #[serde(default)]
     pub targets: Vec<String>,
+    #[serde(default)]
     pub whitelist: Vec<String>,
+    #[serde(default)]
     pub logging: LoggingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
+    #[serde(default = "default_log_enabled")]
     pub enabled: bool,
+    #[serde(default = "default_log_path")]
     pub path: String,
+    #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_log_enabled(),
+            path: default_log_path(),
+            retention_days: default_retention_days(),
+        }
+    }
 }
 
 impl Default for Config {
@@ -816,6 +863,29 @@ mod tests {
         assert_eq!(config.whitelist.len(), 2);
         assert!(config.logging.enabled);
         assert_eq!(config.logging.retention_days, 7);
+    }
+
+    #[test]
+    fn test_partial_config_uses_defaults() {
+        // A config missing most keys must still parse (forward/backward compat),
+        // filling in sensible defaults instead of failing.
+        let config: Config = toml::from_str(r#"targets = ["node.*claude"]"#).unwrap();
+        assert_eq!(config.targets, vec!["node.*claude"]);
+        assert_eq!(config.scan_interval, 5);
+        assert_eq!(config.grace_period, 30);
+        assert_eq!(config.sigterm_timeout, 5);
+        assert!(config.logging.enabled);
+        assert_eq!(config.logging.retention_days, 7);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_empty_config_uses_all_defaults() {
+        // An empty file yields empty (safe) targets and valid numeric defaults.
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.targets.is_empty());
+        assert_eq!(config.scan_interval, 5);
+        assert!(config.validate().is_ok());
     }
 
     #[test]

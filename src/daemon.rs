@@ -276,7 +276,9 @@ fn record_cleanup_stats(results: &[crate::cleaner::CleanResult]) {
     }
 
     let event = CleanupEvent {
-        timestamp: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+        // RFC3339 (with timezone offset) so cutoff filtering is timezone/DST safe
+        // and the file is parseable by standard tools.
+        timestamp: chrono::Local::now().to_rfc3339(),
         cleaned,
         failed,
         processes: results
@@ -306,7 +308,12 @@ fn record_cleanup_stats(results: &[crate::cleaner::CleanResult]) {
                 tracing::warn!("Refusing to rotate stats: {e}");
                 return;
             }
-            let _ = std::fs::rename(&stats_path, &rotated);
+            if std::fs::rename(&stats_path, &rotated).is_ok() {
+                tracing::info!(
+                    "Rotated stats to {} (previous .old is overwritten; `stats` still reads both files)",
+                    rotated.display()
+                );
+            }
         }
     }
 
@@ -328,10 +335,27 @@ fn get_stats_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".proc-janitor").join("stats.jsonl"))
 }
 
+/// Whether a recorded event timestamp is at or after the cutoff. Accepts RFC3339
+/// (current format) and the legacy "%Y-%m-%dT%H:%M:%S" naive-local format.
+/// Unparseable timestamps are included rather than silently dropped.
+fn event_within_cutoff(timestamp: &str, cutoff: chrono::DateTime<chrono::Local>) -> bool {
+    use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+    if let Ok(dt) = DateTime::parse_from_rfc3339(timestamp) {
+        return dt.with_timezone(&Local) >= cutoff;
+    }
+    if let Ok(naive) = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H:%M:%S") {
+        if let Some(dt) = Local.from_local_datetime(&naive).single() {
+            return dt >= cutoff;
+        }
+    }
+    true
+}
+
 /// Show cleanup statistics summary
 pub fn show_stats(days: u64, json: bool) -> Result<()> {
     let stats_path = get_stats_path().ok_or_else(|| anyhow::anyhow!("HOME not found"))?;
-    if !stats_path.exists() {
+    let rotated_path = stats_path.with_extension("jsonl.old");
+    if !stats_path.exists() && !rotated_path.exists() {
         if json {
             println!("{{\"total_cleaned\":0,\"total_failed\":0,\"events\":0}}");
         } else {
@@ -342,9 +366,7 @@ pub fn show_stats(days: u64, json: bool) -> Result<()> {
     }
 
     let cutoff = chrono::Local::now() - chrono::Duration::days(days as i64);
-    let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S").to_string();
 
-    let file = std::io::BufReader::new(fs::File::open(&stats_path)?);
     use std::io::BufRead;
 
     let mut total_cleaned: usize = 0;
@@ -353,22 +375,30 @@ pub fn show_stats(days: u64, json: bool) -> Result<()> {
     let mut process_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
 
-    for line in file.lines().map_while(Result::ok) {
-        if let Ok(event) = serde_json::from_str::<CleanupEvent>(&line) {
-            if event.timestamp < cutoff_str {
-                continue;
-            }
-            event_count += 1;
-            total_cleaned += event.cleaned;
-            total_failed += event.failed;
-            for proc_name in &event.processes {
-                // Extract just the name (before " (PID")
-                let name = proc_name
-                    .split(" (PID")
-                    .next()
-                    .unwrap_or(proc_name)
-                    .to_string();
-                *process_counts.entry(name).or_default() += 1;
+    // Read the rotated file first (older), then the current one, so a rotation
+    // doesn't silently drop history from the aggregated stats.
+    for path in [&rotated_path, &stats_path] {
+        if !path.exists() {
+            continue;
+        }
+        let file = std::io::BufReader::new(fs::File::open(path)?);
+        for line in file.lines().map_while(Result::ok) {
+            if let Ok(event) = serde_json::from_str::<CleanupEvent>(&line) {
+                if !event_within_cutoff(&event.timestamp, cutoff) {
+                    continue;
+                }
+                event_count += 1;
+                total_cleaned += event.cleaned;
+                total_failed += event.failed;
+                for proc_name in &event.processes {
+                    // Extract just the name (before " (PID")
+                    let name = proc_name
+                        .split(" (PID")
+                        .next()
+                        .unwrap_or(proc_name)
+                        .to_string();
+                    *process_counts.entry(name).or_default() += 1;
+                }
             }
         }
     }
@@ -526,6 +556,12 @@ pub fn daemonize() -> Result<()> {
 
 /// Start the daemon (called from CLI)
 pub fn start(foreground: bool, dry_run: bool) -> Result<()> {
+    // Refuse to run a killing daemon inside a container (PPID=1 is meaningless
+    // there). Dry-run is still allowed since it sends no signals.
+    if !dry_run {
+        crate::scanner::container_guard()?;
+    }
+
     // Try to acquire exclusive lock on PID file to prevent race conditions
     let pid_path = get_pid_file_path()?;
     let lock_file = std::fs::OpenOptions::new()
@@ -969,6 +1005,20 @@ mod tests {
         assert_ne!(classify_signal(SIGHUP), Some(SignalAction::Shutdown));
         // Unhandled signals are ignored.
         assert_eq!(classify_signal(signal_hook::consts::SIGUSR1), None);
+    }
+
+    #[test]
+    fn test_event_within_cutoff() {
+        let cutoff = chrono::Local::now() - chrono::Duration::days(7);
+        let recent = chrono::Local::now().to_rfc3339();
+        let old = (chrono::Local::now() - chrono::Duration::days(30)).to_rfc3339();
+        assert!(event_within_cutoff(&recent, cutoff));
+        assert!(!event_within_cutoff(&old, cutoff));
+        // Legacy naive-local format is still understood.
+        let legacy_recent = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        assert!(event_within_cutoff(&legacy_recent, cutoff));
+        // Unparseable timestamps are included (never silently dropped).
+        assert!(event_within_cutoff("not-a-timestamp", cutoff));
     }
 
     #[test]

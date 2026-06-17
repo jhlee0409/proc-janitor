@@ -155,6 +155,10 @@ pub fn clean_filtered(
     dry_run: bool,
     assume_yes: bool,
 ) -> Result<CleanSummary> {
+    // Refuse to kill inside a container (unless dry-run, which sends no signals).
+    if !dry_run {
+        crate::scanner::container_guard()?;
+    }
     let mut config = Config::load()?;
     let sigterm_timeout = config.sigterm_timeout;
     let targets_configured = !config.targets.is_empty();
@@ -250,6 +254,7 @@ pub fn clean_interactive(
     pattern: Option<&str>,
     min_age: Option<u64>,
 ) -> Result<CleanSummary> {
+    crate::scanner::container_guard()?;
     let mut config = Config::load()?;
     let sigterm_timeout = config.sigterm_timeout;
     let targets_configured = !config.targets.is_empty();

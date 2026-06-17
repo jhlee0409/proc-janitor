@@ -304,7 +304,7 @@ fn run() -> Result<()> {
                 session::clean_session(&session_id, dry_run)?;
             }
             SessionCommands::List => {
-                session::list()?;
+                session::list(cli.json)?;
             }
             SessionCommands::Unregister { session_id } => {
                 session::unregister(&session_id)?;
@@ -319,9 +319,20 @@ fn run() -> Result<()> {
         }
 
         Commands::Version => {
-            println!("proc-janitor {}", env!("CARGO_PKG_VERSION"));
-            println!("License: {}", env!("CARGO_PKG_LICENSE"));
-            println!("Repository: {}", env!("CARGO_PKG_REPOSITORY"));
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "license": env!("CARGO_PKG_LICENSE"),
+                        "repository": env!("CARGO_PKG_REPOSITORY"),
+                    }))?
+                );
+            } else {
+                println!("proc-janitor {}", env!("CARGO_PKG_VERSION"));
+                println!("License: {}", env!("CARGO_PKG_LICENSE"));
+                println!("Repository: {}", env!("CARGO_PKG_REPOSITORY"));
+            }
         }
 
         Commands::Completions { shell } => {

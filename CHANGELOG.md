@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-06-17
+
+User-perspective audit fixes. The low-level kill safety (system-PID guard,
+start_time identity checks, file locking) was already solid; these fixes
+address the policy/default/deployment layer where users actually got hurt.
+
+### Fixed
+- **`reload` no longer kills the daemon.** `ctrlc`'s `termination` feature
+  routed SIGHUP to the shutdown handler, so `proc-janitor reload` terminated
+  the daemon instead of reloading config (and stayed dead under systemd
+  `Restart=on-failure`). Replaced `ctrlc` with `signal-hook`: SIGINT/SIGTERM
+  shut down, SIGHUP reloads. Removing `ctrlc` also drops duplicate `nix 0.30`
+  / `windows-sys` / `dispatch2` transitive dependencies.
+- **`session auto-clean` no longer kills live sessions.** `register` recorded
+  `parent_pid` as the short-lived CLI process (which exits immediately), so
+  every default-registered session looked stale at once. It now records the
+  invoking parent via `getppid()` and its `start_time`; staleness requires the
+  parent to be gone or its PID reused (identity mismatch).
+- A reloaded `sigterm_timeout` now takes effect on the next daemon cycle.
+- systemd unit `ExecStart` was hardcoded to `/usr/local/bin`, which broke the
+  documented `cargo install` flow (`~/.cargo/bin`); it is now templated
+  (`__BIN__`, substituted at install time).
+
+### Changed
+- **Safe by default.** With no config file, targets are empty and nothing is
+  killed; the daemon refuses to start until targets are configured (via
+  `config init` or `PROC_JANITOR_TARGETS`). Previously a fresh install ran on
+  built-in `claude`/`node.*mcp` targets and could kill a running Claude Code
+  session on the first `clean`/`start`.
+- **`clean` confirms before killing.** On an interactive terminal, `clean`
+  now lists the targets and asks before sending signals. Non-TTY usage
+  (scripts/cron/pipes) proceeds unprompted, so automation is unaffected.
+- `config init --preset dev` now warns that its broad patterns (`node`,
+  `python`, `cargo`, ...) can match your own running processes.
+
+### Added
+- `clean --dry-run` / `-d` — show what would be killed without sending signals.
+- `clean --yes` / `-y` — skip the confirmation prompt.
+- `clean --json` output now includes `dry_run` and `aborted` fields.
+- `install-binary.sh` (curl|sh) verifies the downloaded tarball against its
+  published SHA256 checksum before installing.
+- README: `loginctl enable-linger` and data-dir pre-creation in the Linux
+  (systemd) setup so the daemon survives reboot/logout.
+
 ## [0.5.1] - 2026-02-06
 
 ### Fixed

@@ -519,7 +519,11 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
                 sys.process(sysinfo::Pid::from_u32(ppid))
                     .map(|p| p.start_time())
             });
-            is_session_stale(session.parent_pid, session.parent_start_time, live_start_time)
+            is_session_stale(
+                session.parent_pid,
+                session.parent_start_time,
+                live_start_time,
+            )
         })
         .map(|(id, _)| id.clone())
         .collect();

@@ -74,6 +74,14 @@ pub enum Commands {
         #[arg(long, short = 'i')]
         interactive: bool,
 
+        /// Dry-run: show what would be killed without sending any signals
+        #[arg(long, short = 'd')]
+        dry_run: bool,
+
+        /// Skip the confirmation prompt (proceed without asking on a terminal)
+        #[arg(long, short = 'y')]
+        yes: bool,
+
         /// Only clean processes older than N seconds
         #[arg(long)]
         min_age: Option<u64>,

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::IsTerminal;
 
 use anyhow::Result;
 use nix::sys::signal::Signal;
@@ -35,6 +36,11 @@ pub struct CleanSummary {
     pub failed: usize,
     pub results: Vec<CleanResult>,
     pub targets_configured: bool,
+    /// True when this was a dry-run (nothing was actually killed).
+    pub dry_run: bool,
+    /// True when a confirmation prompt was declined and nothing was killed.
+    #[serde(default)]
+    pub aborted: bool,
 }
 
 /// Clean a single process by PID using a shared System instance (for batch operations)
@@ -146,6 +152,8 @@ pub fn clean_filtered(
     pids: &[u32],
     pattern: Option<&str>,
     min_age: Option<u64>,
+    dry_run: bool,
+    assume_yes: bool,
 ) -> Result<CleanSummary> {
     let mut config = Config::load()?;
     let sigterm_timeout = config.sigterm_timeout;
@@ -182,12 +190,6 @@ pub fn clean_filtered(
     // Collect owned copies for clean_all (which expects &[OrphanProcess])
     let to_clean: Vec<OrphanProcess> = filtered.into_iter().cloned().collect();
 
-    let results = if !to_clean.is_empty() {
-        clean_all(&to_clean, sigterm_timeout, false)?
-    } else {
-        Vec::new()
-    };
-
     // Warn when filters were specified but nothing matched
     let has_filters = !pids.is_empty() || pattern.is_some() || min_age.is_some();
     if has_filters && to_clean.is_empty() && !orphans.is_empty() {
@@ -196,6 +198,37 @@ pub fn clean_filtered(
             orphans.len()
         );
     }
+
+    // Confirmation gate: on an interactive terminal, show the kill list and ask
+    // before doing anything destructive. Skipped for --dry-run, --yes, and for
+    // non-TTY stdin (scripts/cron/pipes), which proceed as before.
+    if !dry_run && !assume_yes && !to_clean.is_empty() && std::io::stdin().is_terminal() {
+        eprintln!("About to kill {} orphaned process(es):", to_clean.len());
+        for o in &to_clean {
+            eprintln!("  PID {} - {} ({})", o.pid, o.name, o.cmdline);
+        }
+        eprint!("Proceed? [y/N] ");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            eprintln!("Aborted. No processes were killed.");
+            return Ok(CleanSummary {
+                total: 0,
+                successful: 0,
+                failed: 0,
+                results: Vec::new(),
+                targets_configured,
+                dry_run: false,
+                aborted: true,
+            });
+        }
+    }
+
+    let results = if !to_clean.is_empty() {
+        clean_all(&to_clean, sigterm_timeout, dry_run)?
+    } else {
+        Vec::new()
+    };
 
     let successful = results.iter().filter(|r| r.success).count();
     let failed = results.len() - successful;
@@ -206,6 +239,8 @@ pub fn clean_filtered(
         failed,
         results,
         targets_configured,
+        dry_run,
+        aborted: false,
     })
 }
 
@@ -277,6 +312,8 @@ pub fn clean_interactive(
         failed,
         results,
         targets_configured,
+        dry_run: false,
+        aborted: false,
     })
 }
 

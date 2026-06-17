@@ -140,6 +140,37 @@ fn test_clean_command() {
 }
 
 #[test]
+fn test_clean_dry_run() {
+    // Dry-run must never kill anything and must succeed regardless of state.
+    let output = Command::new(binary_path())
+        .args(["clean", "--dry-run"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Either there are matches ("[DRY-RUN] ... would be killed") or none.
+    assert!(combined.contains("DRY-RUN") || combined.contains("would be killed"));
+}
+
+#[test]
+fn test_clean_dry_run_json() {
+    let output = Command::new(binary_path())
+        .args(["--json", "clean", "--dry-run"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // JSON summary must expose the dry_run flag set to true.
+    assert!(stdout.contains("\"dry_run\": true"));
+}
+
+#[test]
 fn test_clean_with_pid_filter() {
     let output = Command::new(binary_path())
         .args(["clean", "--pid", "99999"])

@@ -570,6 +570,18 @@ pub fn start(foreground: bool, dry_run: bool) -> Result<()> {
             Config::default()
         }
     };
+
+    // Refuse to start a daemon that has no targets — it would silently do
+    // nothing. A fresh install with no config file yields empty targets (see
+    // config::load), so this guides the user to set up before starting.
+    if config.targets.is_empty() {
+        let _ = fs2::FileExt::unlock(&lock_file);
+        bail!(
+            "No target patterns configured — the daemon would do nothing. \
+             Run 'proc-janitor config init' (or set PROC_JANITOR_TARGETS) first."
+        );
+    }
+
     let scanner = Scanner::new(config.clone())?;
 
     if foreground {

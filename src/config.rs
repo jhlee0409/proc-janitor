@@ -158,8 +158,14 @@ impl Config {
         let path = config_path()?;
 
         if !path.exists() {
-            // Return default config if file doesn't exist
-            return Self::new_default();
+            // No config file: return a SAFE no-op config (empty targets) rather
+            // than the built-in default targets. A fresh install must never kill
+            // anything until the user explicitly runs `config init`. Env-var
+            // overrides (applied later) can still populate targets if desired.
+            let mut config = Self::new_default()?;
+            config.targets = Vec::new();
+            config.whitelist = Vec::new();
+            return Ok(config);
         }
 
         // Warn if config file is world-readable or world-writable
@@ -322,7 +328,6 @@ pub fn config_path() -> Result<PathBuf> {
         .join("proc-janitor")
         .join("config.toml"))
 }
-
 /// Ensure configuration directory exists
 pub fn ensure_config_dir() -> Result<()> {
     let path = config_path()?;
@@ -507,6 +512,18 @@ pub fn init(force: bool, preset: Option<String>, yes: bool) -> Result<()> {
             preset_name,
             path.display()
         );
+        if preset_name == "dev" {
+            let warn = "Warning: the 'dev' preset uses broad patterns (node, cargo, python, ...) \
+                 that match by substring against the full command line. They can match your OWN \
+                 running dev servers/scripts once they become orphans (PPID=1). \
+                 Review with 'proc-janitor scan' and try 'proc-janitor clean --dry-run' before \
+                 enabling the daemon.";
+            if use_color() {
+                println!("\n{}", warn.yellow());
+            } else {
+                println!("\n{warn}");
+            }
+        }
         println!("Edit with: proc-janitor config edit");
         return Ok(());
     }

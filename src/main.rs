@@ -147,16 +147,38 @@ fn run() -> Result<()> {
             pid,
             pattern,
             interactive,
+            dry_run,
+            yes,
             min_age,
         } => {
-            let result = if interactive {
+            let result = if dry_run {
+                cleaner::clean_filtered(&pid, pattern.as_deref(), min_age, true, yes)?
+            } else if interactive {
                 cleaner::clean_interactive(&pid, pattern.as_deref(), min_age)?
             } else {
-                cleaner::clean_filtered(&pid, pattern.as_deref(), min_age)?
+                cleaner::clean_filtered(&pid, pattern.as_deref(), min_age, false, yes)?
             };
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if result.aborted {
+                // User declined at the confirmation prompt; cleaner already
+                // printed a notice to stderr. Nothing more to report.
+            } else if result.dry_run {
+                if cli.quiet {
+                    println!("{}", result.total);
+                } else if result.total == 0 {
+                    println!("[DRY-RUN] No orphaned processes would be killed.");
+                } else {
+                    println!(
+                        "[DRY-RUN] {} orphaned process(es) would be killed:",
+                        result.total
+                    );
+                    for res in &result.results {
+                        println!("  PID {} - {}", res.pid, res.name);
+                    }
+                    println!("\nRun 'proc-janitor clean' (without --dry-run) to kill them.");
+                }
             } else if result.total == 0 {
                 if !cli.quiet {
                     if use_color() {

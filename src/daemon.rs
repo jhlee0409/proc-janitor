@@ -41,9 +41,28 @@ pub struct Daemon {
     config: Config,
     scanner: Scanner,
     running: Arc<AtomicBool>,
+    reload_requested: Arc<AtomicBool>,
     condvar: Arc<(Mutex<bool>, Condvar)>,
     config_mtime: Option<std::time::SystemTime>,
     dry_run: bool,
+}
+
+/// What a received signal should make the daemon do.
+#[derive(Debug, PartialEq, Eq)]
+enum SignalAction {
+    Shutdown,
+    Reload,
+}
+
+/// Map a raw signal number to the daemon's intended action.
+/// SIGHUP triggers a config reload; SIGINT/SIGTERM trigger graceful shutdown.
+fn classify_signal(sig: i32) -> Option<SignalAction> {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    match sig {
+        SIGHUP => Some(SignalAction::Reload),
+        SIGINT | SIGTERM => Some(SignalAction::Shutdown),
+        _ => None,
+    }
 }
 
 impl Daemon {
@@ -56,6 +75,7 @@ impl Daemon {
             config,
             scanner,
             running: Arc::new(AtomicBool::new(false)),
+            reload_requested: Arc::new(AtomicBool::new(false)),
             condvar: Arc::new((Mutex::new(false), Condvar::new())),
             config_mtime,
             dry_run,
@@ -71,20 +91,26 @@ impl Daemon {
 
         if current_mtime != self.config_mtime {
             self.config_mtime = current_mtime;
-            match Config::load() {
-                Ok(new_config) => match Scanner::new(new_config.clone()) {
-                    Ok(new_scanner) => {
-                        eprintln!("Config reloaded successfully.");
-                        self.config = new_config;
-                        self.scanner = new_scanner;
-                    }
-                    Err(e) => {
-                        eprintln!("Config reload failed (invalid patterns): {e}");
-                    }
-                },
-                Err(e) => {
-                    eprintln!("Config reload failed: {e}");
+            self.reload_config();
+        }
+    }
+
+    /// Reload configuration and rebuild the scanner. Shared by the config-file
+    /// mtime watcher and explicit SIGHUP reload requests.
+    fn reload_config(&mut self) {
+        match Config::load() {
+            Ok(new_config) => match Scanner::new(new_config.clone()) {
+                Ok(new_scanner) => {
+                    eprintln!("Config reloaded successfully.");
+                    self.config = new_config;
+                    self.scanner = new_scanner;
                 }
+                Err(e) => {
+                    eprintln!("Config reload failed (invalid patterns): {e}");
+                }
+            },
+            Err(e) => {
+                eprintln!("Config reload failed: {e}");
             }
         }
     }
@@ -107,27 +133,44 @@ impl Daemon {
 
         self.running.store(true, Ordering::SeqCst);
 
-        // Setup signal handlers with double-signal guard
+        // Setup signal handling in a dedicated thread.
+        // SIGINT/SIGTERM => graceful shutdown, SIGHUP => config reload.
+        // (Previously ctrlc's "termination" feature routed SIGHUP to the same
+        // shutdown handler, so `proc-janitor reload` killed the daemon.)
         let running = Arc::clone(&self.running);
+        let reload_requested = Arc::clone(&self.reload_requested);
         let condvar = Arc::clone(&self.condvar);
-        let shutdown_initiated = Arc::new(AtomicBool::new(false));
-        let shutdown_flag = Arc::clone(&shutdown_initiated);
-        ctrlc::set_handler(move || {
-            // Prevent double-shutdown from repeated signals
-            if shutdown_flag.swap(true, Ordering::SeqCst) {
-                return;
-            }
-            eprintln!("Received termination signal, shutting down gracefully...");
-            running.store(false, Ordering::SeqCst);
-            // Wake up the daemon immediately
-            let (lock, cvar) = &*condvar;
-            let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-            *guard = true;
-            cvar.notify_one();
-        })
+        let mut signals = signal_hook::iterator::Signals::new([
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGHUP,
+        ])
         .context("Failed to set signal handler")?;
+        std::thread::spawn(move || {
+            let shutdown_initiated = AtomicBool::new(false);
+            for sig in signals.forever() {
+                match classify_signal(sig) {
+                    Some(SignalAction::Reload) => {
+                        reload_requested.store(true, Ordering::SeqCst);
+                    }
+                    Some(SignalAction::Shutdown) => {
+                        // Prevent double-shutdown from repeated signals
+                        if shutdown_initiated.swap(true, Ordering::SeqCst) {
+                            continue;
+                        }
+                        eprintln!("Received termination signal, shutting down gracefully...");
+                        running.store(false, Ordering::SeqCst);
+                    }
+                    None => continue,
+                }
+                // Wake up the daemon immediately so it acts on the signal.
+                let (lock, cvar) = &*condvar;
+                let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+                *guard = true;
+                cvar.notify_one();
+            }
+        });
 
-        let sigterm_timeout = self.config.sigterm_timeout;
         println!(
             "Daemon started. Scanning every {} seconds...",
             self.config.scan_interval
@@ -135,6 +178,16 @@ impl Daemon {
 
         // Main loop - reuses self.scanner to preserve tracked state across cycles
         while self.running.load(Ordering::SeqCst) {
+            // Explicit SIGHUP reload: force a reload regardless of mtime, and
+            // sync config_mtime so the watcher below doesn't reload again.
+            if self.reload_requested.swap(false, Ordering::SeqCst) {
+                eprintln!("SIGHUP received, reloading configuration...");
+                self.config_mtime = crate::config::config_path()
+                    .ok()
+                    .and_then(|p| fs::metadata(p).ok())
+                    .and_then(|m| m.modified().ok());
+                self.reload_config();
+            }
             self.check_config_reload();
             match scanner::scan_with_scanner(&mut self.scanner) {
                 Ok(result) if !result.orphans.is_empty() => {
@@ -148,7 +201,11 @@ impl Daemon {
                             );
                         }
                     } else {
-                        match crate::cleaner::clean_all(&result.orphans, sigterm_timeout, false) {
+                        match crate::cleaner::clean_all(
+                            &result.orphans,
+                            self.config.sigterm_timeout,
+                            false,
+                        ) {
                             Ok(results) => {
                                 let cleaned = results.iter().filter(|r| r.success).count();
                                 if cleaned > 0 {
@@ -513,6 +570,18 @@ pub fn start(foreground: bool, dry_run: bool) -> Result<()> {
             Config::default()
         }
     };
+
+    // Refuse to start a daemon that has no targets — it would silently do
+    // nothing. A fresh install with no config file yields empty targets (see
+    // config::load), so this guides the user to set up before starting.
+    if config.targets.is_empty() {
+        let _ = fs2::FileExt::unlock(&lock_file);
+        bail!(
+            "No target patterns configured — the daemon would do nothing. \
+             Run 'proc-janitor config init' (or set PROC_JANITOR_TARGETS) first."
+        );
+    }
+
     let scanner = Scanner::new(config.clone())?;
 
     if foreground {
@@ -886,6 +955,20 @@ mod tests {
         // Optional fields should be absent when None (skip_serializing_if)
         assert!(!json.contains("uptime_seconds"));
         assert!(!json.contains("scan_interval"));
+    }
+
+    #[test]
+    fn test_classify_signal_sighup_reloads_not_shutdown() {
+        // Regression: ctrlc's "termination" feature routed SIGHUP to the
+        // shutdown handler, so `proc-janitor reload` killed the daemon.
+        // SIGHUP must request a reload, never a shutdown.
+        use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+        assert_eq!(classify_signal(SIGHUP), Some(SignalAction::Reload));
+        assert_eq!(classify_signal(SIGINT), Some(SignalAction::Shutdown));
+        assert_eq!(classify_signal(SIGTERM), Some(SignalAction::Shutdown));
+        assert_ne!(classify_signal(SIGHUP), Some(SignalAction::Shutdown));
+        // Unhandled signals are ignored.
+        assert_eq!(classify_signal(signal_hook::consts::SIGUSR1), None);
     }
 
     #[test]

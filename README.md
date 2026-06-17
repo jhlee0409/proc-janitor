@@ -94,8 +94,25 @@ This builds the binary, installs it, creates a default config, and sets up a mac
 
 ```bash
 cargo install proc-janitor
-sudo cp resources/proc-janitor.service /etc/systemd/user/
+
+# Create the data/config dirs (required by the sandboxed unit before it starts)
+mkdir -p ~/.proc-janitor ~/.config/proc-janitor
+
+# Choose what to clean up — nothing is killed until you configure targets
+proc-janitor config init
+
+# Install the user service, substituting the absolute path to your binary
+# (cargo install puts it in ~/.cargo/bin, which is not on systemd's PATH).
+mkdir -p ~/.config/systemd/user
+sed "s|__BIN__|$(command -v proc-janitor)|" resources/proc-janitor.service \
+  > ~/.config/systemd/user/proc-janitor.service
+
+systemctl --user daemon-reload
 systemctl --user enable --now proc-janitor
+
+# IMPORTANT: keep the daemon running across reboots and without an active
+# login session — without this, a --user service stops at logout/reboot.
+loginctl enable-linger "$USER"
 ```
 
 ### Uninstall
@@ -120,7 +137,10 @@ proc-janitor scan
 # Watch mode: continuously scan every 5 seconds
 proc-janitor scan --watch 5
 
-# Kill all detected orphans
+# Preview what would be killed (no signals sent)
+proc-janitor clean --dry-run
+
+# Kill all detected orphans (asks for confirmation on a terminal)
 proc-janitor clean
 
 # Kill only specific PIDs
@@ -238,7 +258,7 @@ Every config option can be overridden via environment variables. Values outside 
 | `stop` | Stop the daemon |
 | `status` | Show daemon status (systemctl-style with uptime) |
 | `scan [-w\|--watch SECS]` | Detect orphaned processes (safe, no killing). With `--watch`, continuously scan at interval. |
-| `clean [--pid PIDs] [--pattern REGEX] [-i\|--interactive] [--min-age SECS]` | Kill orphaned target processes (all by default, or filter by PID/pattern/age). With `-i`, confirm each kill. |
+| `clean [--pid PIDs] [--pattern REGEX] [-i\|--interactive] [-d\|--dry-run] [-y\|--yes] [--min-age SECS]` | Kill orphaned target processes (all by default, or filter by PID/pattern/age). On an interactive terminal it lists the targets and asks for confirmation first; `-y` skips the prompt, `-i` confirms each kill, `-d` only shows what would be killed. |
 | `restart [-f\|--foreground] [-d\|--dry-run]` | Restart the daemon (stop + start) |
 | `reload` | Reload daemon configuration (sends SIGHUP, no restart needed) |
 | `stats [--days N]` | Show cleanup statistics from the last N days (default: 7). Supports `--json`. |
@@ -310,6 +330,8 @@ launchctl unload ~/Library/LaunchAgents/com.proc-janitor.plist
 - **Symlink protection** — refuses to write to symlinks at predictable paths (`~/.proc-janitor/`), preventing local symlink attacks
 - **TOCTOU-safe session store** — exclusive file lock held across full read-modify-write cycle
 - **Guided setup** — shows a helpful hint when no target patterns are configured, guiding users to `config init`
+- **Safe by default** — with no config file, targets are empty and nothing is killed; the daemon refuses to start until you run `config init` (or set `PROC_JANITOR_TARGETS`)
+- **Confirm before killing** — interactive `clean` lists targets and prompts on a terminal (`-y` to skip, `-d` for a dry-run); non-TTY usage (scripts/cron) proceeds unprompted
 - **Scan before clean** — `scan` is always safe (detection only), `clean` is always destructive (with optional filters)
 - **Atomic file operations** — config and session data use file locking with fsync for crash safety
 - **Directory permissions** — `~/.proc-janitor/` created with `0o700` (owner-only access)

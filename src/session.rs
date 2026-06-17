@@ -56,6 +56,10 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub tty: Option<String>,
     pub parent_pid: Option<u32>,
+    /// start_time of parent_pid at registration, for PID-reuse detection in
+    /// auto-clean. `#[serde(default)]` keeps older sessions.json files loadable.
+    #[serde(default)]
+    pub parent_start_time: Option<u64>,
 }
 
 /// Source of the session for extensibility
@@ -299,6 +303,18 @@ pub fn register(
     let session_id = id.unwrap_or_else(uuid_v4);
     let tty = get_current_tty();
 
+    // Resolve the parent process to track. Default to the REGISTERING process's
+    // parent (the terminal / Claude Code / shell that invoked us) via getppid(),
+    // NOT this short-lived CLI process (std::process::id()), which exits
+    // immediately and would make `auto-clean` consider the session stale right
+    // away. Capture the parent's start_time so auto-clean can tell "parent
+    // exited" apart from "parent PID was reused".
+    let resolved_parent_pid = parent_pid.or_else(|| {
+        let ppid = nix::unistd::getppid().as_raw();
+        u32::try_from(ppid).ok()
+    });
+    let parent_start_time = resolved_parent_pid.and_then(capture_start_time);
+
     let session = Session {
         id: session_id.clone(),
         name,
@@ -306,7 +322,8 @@ pub fn register(
         pids: Vec::new(),
         created_at: Utc::now(),
         tty,
-        parent_pid: parent_pid.or_else(|| Some(std::process::id())),
+        parent_pid: resolved_parent_pid,
+        parent_start_time,
     };
 
     let (mut store, file) = SessionStore::load_exclusive()?;
@@ -330,16 +347,7 @@ pub fn track(session_id: &str, pid: u32) -> Result<()> {
     let (mut store, file) = SessionStore::load_exclusive()?;
 
     // Capture start_time from process table for PID reuse detection
-    let start_time = {
-        let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-        );
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(
-            pid,
-        )]));
-        sys.process(sysinfo::Pid::from_u32(pid))
-            .map(|p| p.start_time())
-    };
+    let start_time = capture_start_time(pid);
 
     if let Some(session) = store.sessions.get_mut(session_id) {
         if !session.pids.iter().any(|tp| tp.pid == pid) {
@@ -504,12 +512,18 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
         .sessions
         .iter()
         .filter(|(_, session)| {
-            if let Some(parent_pid) = session.parent_pid {
-                !sys.processes()
-                    .contains_key(&sysinfo::Pid::from_u32(parent_pid))
-            } else {
-                false
-            }
+            // A session is stale only when its real parent (terminal / Claude
+            // Code / shell) is gone, or its PID was reused by a different
+            // process. We verify identity via start_time, not mere PID presence.
+            let live_start_time = session.parent_pid.and_then(|ppid| {
+                sys.process(sysinfo::Pid::from_u32(ppid))
+                    .map(|p| p.start_time())
+            });
+            is_session_stale(
+                session.parent_pid,
+                session.parent_start_time,
+                live_start_time,
+            )
         })
         .map(|(id, _)| id.clone())
         .collect();
@@ -590,6 +604,42 @@ fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// Capture a process's start_time (Unix seconds) for PID-reuse detection.
+/// Returns None if the PID is not present in the process table.
+fn capture_start_time(pid: u32) -> Option<u64> {
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+    );
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(
+        pid,
+    )]));
+    sys.process(sysinfo::Pid::from_u32(pid))
+        .map(|p| p.start_time())
+}
+
+/// Decide whether a session is stale, given its recorded parent identity and the
+/// parent PID's current start_time (`live_start_time` is None when the parent PID
+/// is no longer present). A session is stale when the parent process is gone, or
+/// when the PID now belongs to a different process (start_time mismatch => PID
+/// reuse). Sessions without a known `parent_pid` are never auto-cleaned, because
+/// we cannot determine liveness.
+fn is_session_stale(
+    parent_pid: Option<u32>,
+    parent_start_time: Option<u64>,
+    live_start_time: Option<u64>,
+) -> bool {
+    match parent_pid {
+        None => false,
+        Some(_) => match live_start_time {
+            None => true, // parent process is gone
+            Some(live) => match parent_start_time {
+                Some(stored) => live != stored, // identity changed => PID reused
+                None => false,                  // can't verify; treat live PID as alive
+            },
+        },
+    }
+}
+
 /// Get current TTY from environment variables.
 ///
 /// TTY detection via env vars is unreliable. Falls back to None if TTY/SSH_TTY not set.
@@ -618,6 +668,28 @@ mod tests {
             "terminal".parse::<SessionSource>().unwrap(),
             SessionSource::Terminal
         );
+    }
+
+    #[test]
+    fn test_is_session_stale_logic() {
+        // No known parent => never auto-cleaned (can't determine liveness).
+        assert!(!is_session_stale(None, None, None));
+        assert!(!is_session_stale(None, Some(100), Some(100)));
+
+        // Parent PID gone (no live start_time) => stale.
+        assert!(is_session_stale(Some(42), Some(100), None));
+        assert!(is_session_stale(Some(42), None, None));
+
+        // Parent alive, identity matches => NOT stale. This is the C-3 fix:
+        // a session whose terminal/Claude parent is still running must survive.
+        assert!(!is_session_stale(Some(42), Some(100), Some(100)));
+
+        // Parent PID present but start_time differs => PID was reused => stale.
+        assert!(is_session_stale(Some(42), Some(100), Some(200)));
+
+        // Parent alive but we never recorded its start_time => treat as alive
+        // (don't kill on uncertainty).
+        assert!(!is_session_stale(Some(42), None, Some(200)));
     }
 
     #[test]

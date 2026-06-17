@@ -57,6 +57,44 @@ download() {
     fi
 }
 
+# Verify the downloaded archive against its published .sha256 checksum.
+# Aborts on mismatch. Warns (but continues) if the checksum file or a sha256
+# tool is unavailable, so installs don't break on minimal systems / old releases.
+verify_checksum() {
+    archive_path="$1"
+    sha_url="$2"
+    sha_file="${archive_path}.sha256"
+
+    if ! download "$sha_url" "$sha_file" 2>/dev/null || [ ! -s "$sha_file" ]; then
+        echo "Warning: checksum file unavailable (${sha_url}); skipping integrity check." >&2
+        return 0
+    fi
+
+    expected="$(awk '{print $1}' "$sha_file" | head -1)"
+    if [ -z "$expected" ]; then
+        echo "Warning: could not read expected checksum; skipping integrity check." >&2
+        return 0
+    fi
+
+    if command -v sha256sum > /dev/null 2>&1; then
+        actual="$(sha256sum "$archive_path" | awk '{print $1}')"
+    elif command -v shasum > /dev/null 2>&1; then
+        actual="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+    else
+        echo "Warning: no sha256 tool (sha256sum/shasum) found; skipping integrity check." >&2
+        return 0
+    fi
+
+    if [ "$expected" != "$actual" ]; then
+        echo "Error: SHA256 checksum verification FAILED" >&2
+        echo "  expected: $expected" >&2
+        echo "  actual:   $actual" >&2
+        echo "Refusing to install a binary that does not match its published checksum." >&2
+        exit 1
+    fi
+    echo "Checksum verified (sha256)."
+}
+
 main() {
     platform="$(detect_platform)"
     version="$(get_latest_version)"
@@ -76,6 +114,9 @@ main() {
 
     echo "Downloading ${url}..."
     download "$url" "${tmpdir}/${archive}"
+
+    echo "Verifying checksum..."
+    verify_checksum "${tmpdir}/${archive}" "${url}.sha256"
 
     echo "Extracting..."
     tar xzf "${tmpdir}/${archive}" -C "$tmpdir"
@@ -101,13 +142,25 @@ main() {
     echo ""
     echo "proc-janitor ${version} installed to ${INSTALL_DIR}/${BINARY}"
     echo ""
-    echo "Get started:"
-    echo "  proc-janitor config init    # Create config (auto-detects orphans)"
-    echo "  proc-janitor scan           # Detect orphaned processes"
-    echo "  proc-janitor start          # Start the daemon"
+    echo "Next steps (nothing is killed until you configure targets):"
+    echo "  proc-janitor config init      # Choose what to clean up"
+    echo "  proc-janitor scan             # Detect orphaned processes (safe)"
+    echo "  proc-janitor clean --dry-run  # Preview what would be cleaned"
     echo ""
-    echo "For macOS LaunchAgent setup, run:"
-    echo "  proc-janitor doctor          # Check system health"
+    echo "Note: this installer only installs the binary; it does NOT set up"
+    echo "auto-start. To run proc-janitor as a background service on boot:"
+    case "$platform" in
+        *apple-darwin)
+            echo "  macOS:  brew services start proc-janitor   (Homebrew), or install"
+            echo "          the LaunchAgent via the repo's scripts/install.sh"
+            ;;
+        *linux*)
+            echo "  Linux:  see the README 'Linux (systemd)' section — remember"
+            echo "          'loginctl enable-linger \$USER' so it survives reboots"
+            ;;
+    esac
+    echo ""
+    echo "  proc-janitor doctor           # Check system health"
 }
 
 main

@@ -1,6 +1,6 @@
 [package]
 name = "proc-janitor"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 authors = ["Jack <jhlee0409@users.noreply.github.com>"]
 description = "Automatic orphan process cleaner daemon for macOS/Linux"
@@ -47,7 +47,11 @@ fs2 = "0.4"
 daemonize = "0.5"
 
 # Signal handling
-ctrlc = { version = "3", features = ["termination"] }
+# SIGINT/SIGTERM => shutdown, SIGHUP => config reload (routed in daemon.rs).
+# Note: ctrlc's "termination" feature would route SIGHUP to the shutdown
+# handler, which made `proc-janitor reload` kill the daemon. signal-hook lets
+# us dispatch each signal to a distinct action.
+signal-hook = "0.3"
 
 [build-dependencies]
 clap = { version = "4", features = ["derive"] }

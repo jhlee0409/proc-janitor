@@ -5,11 +5,18 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/proc-janitor start --foreground
+# __BIN__ is replaced with the absolute path to the proc-janitor binary at
+# install time (see the README "Linux (systemd)" section). `cargo install`
+# places the binary in ~/.cargo/bin, which is not on systemd's PATH, so an
+# absolute path is required — a hardcoded /usr/local/bin would not start.
+ExecStart=__BIN__ start --foreground
 Restart=on-failure
 RestartSec=5
 
-# Security hardening
+# Security hardening.
+# NOTE: ~/.proc-janitor and ~/.config/proc-janitor must already exist before
+# the service starts — ReadWritePaths requires the paths to exist when the
+# sandbox is set up. The README install step creates them (mkdir -p).
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only

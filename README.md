@@ -94,8 +94,25 @@ This builds the binary, installs it, creates a default config, and sets up a mac
 
 ```bash
 cargo install proc-janitor
-sudo cp resources/proc-janitor.service /etc/systemd/user/
+
+# Create the data/config dirs (required by the sandboxed unit before it starts)
+mkdir -p ~/.proc-janitor ~/.config/proc-janitor
+
+# Choose what to clean up — nothing is killed until you configure targets
+proc-janitor config init
+
+# Install the user service, substituting the absolute path to your binary
+# (cargo install puts it in ~/.cargo/bin, which is not on systemd's PATH).
+mkdir -p ~/.config/systemd/user
+sed "s|__BIN__|$(command -v proc-janitor)|" resources/proc-janitor.service \
+  > ~/.config/systemd/user/proc-janitor.service
+
+systemctl --user daemon-reload
 systemctl --user enable --now proc-janitor
+
+# IMPORTANT: keep the daemon running across reboots and without an active
+# login session — without this, a --user service stops at logout/reboot.
+loginctl enable-linger "$USER"
 ```
 
 ### Uninstall

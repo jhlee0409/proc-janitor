@@ -61,6 +61,13 @@ pub fn kill_process_with_sys(
         bail!("Refusing to kill system process (PID {pid})");
     }
 
+    // Never kill our own process. A daemonized proc-janitor has PPID=1, so a
+    // broad user pattern (e.g. matching "proc-janitor" or ".*") could otherwise
+    // make the daemon detect and SIGKILL itself.
+    if pid == std::process::id() {
+        bail!("Refusing to kill proc-janitor's own process (PID {pid})");
+    }
+
     let raw_pid = i32::try_from(pid).context("PID exceeds i32 range")?;
     let nix_pid = Pid::from_raw(raw_pid);
 
@@ -160,6 +167,14 @@ mod tests {
     }
 
     #[test]
+    fn test_self_pid_guard() {
+        // Killing our own PID must be refused (daemon self-kill protection).
+        let result = kill_process(std::process::id(), None, 5);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("own process"));
+    }
+
+    #[test]
     fn test_pid_exceeds_i32_range() {
         // u32::MAX (4294967295) exceeds i32::MAX
         let result = kill_process(u32::MAX, None, 5);
@@ -188,11 +203,23 @@ mod tests {
 
     #[test]
     fn test_kill_with_wrong_start_time() {
-        // Killing our own PID with wrong start_time should fail (identity mismatch)
-        let our_pid = std::process::id();
-        let result = kill_process(our_pid, Some(0), 5);
+        // A real (non-self) process with a wrong start_time must be refused as an
+        // identity mismatch — distinct from the self-PID guard above.
+        use std::process::Command;
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("Failed to spawn sleep process");
+        let pid = child.id();
+
+        // start_time 0 never matches a freshly spawned process.
+        let result = kill_process(pid, Some(0), 5);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("identity changed"));
+
+        // Identity check failed before any signal was sent, so clean up manually.
+        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+        let _ = child.wait();
     }
 
     #[test]

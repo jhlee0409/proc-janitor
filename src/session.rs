@@ -348,6 +348,12 @@ pub fn track(session_id: &str, pid: u32) -> Result<()> {
 
     // Capture start_time from process table for PID reuse detection
     let start_time = capture_start_time(pid);
+    if start_time.is_none() {
+        eprintln!(
+            "Warning: PID {pid} was not found in the process table; tracking it without a \
+             start_time. PID-reuse protection will be disabled for this PID."
+        );
+    }
 
     if let Some(session) = store.sessions.get_mut(session_id) {
         if !session.pids.iter().any(|tp| tp.pid == pid) {
@@ -450,9 +456,14 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
 }
 
 /// List all active sessions
-pub fn list() -> Result<()> {
+pub fn list(json: bool) -> Result<()> {
     let store = SessionStore::load()?;
     let sessions = store.list();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&sessions)?);
+        return Ok(());
+    }
 
     if sessions.is_empty() {
         println!("No active sessions.");

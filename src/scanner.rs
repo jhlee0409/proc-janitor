@@ -28,6 +28,33 @@ fn detect_container_environment() -> bool {
     false
 }
 
+/// Guard destructive operations against running inside a container.
+///
+/// In containers every process has PPID=1 (the container init), so orphan
+/// detection is meaningless and would flag the container's own workload. `scan`
+/// (detection only) is always allowed; `clean` and the daemon call this to
+/// refuse to act unless the user explicitly opts in via
+/// `PROC_JANITOR_ALLOW_CONTAINER=1`.
+pub fn container_guard() -> Result<()> {
+    if !detect_container_environment() {
+        return Ok(());
+    }
+    let allowed = std::env::var("PROC_JANITOR_ALLOW_CONTAINER")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if allowed {
+        tracing::warn!(
+            "Container detected but PROC_JANITOR_ALLOW_CONTAINER is set; proceeding anyway."
+        );
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Container environment detected: every process has PPID=1, so proc-janitor cannot \
+         distinguish real orphans from your container's workload and is refusing to act \
+         (this prevents killing the container itself). Set PROC_JANITOR_ALLOW_CONTAINER=1 to override."
+    )
+}
+
 /// Represents an orphaned process detected by the scanner
 #[derive(Debug, Clone, Serialize)]
 pub struct OrphanProcess {

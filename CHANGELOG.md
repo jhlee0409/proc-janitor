@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-08-30
 
-Reliability and observability fixes found by re-auditing the daemon loop, the
-logging pipeline, and the test harness. All of these are reproduced by tests or
-measured, not inferred.
+Two capability changes — prevention via `exec`, and event-driven reaction in the
+daemon — plus the reliability and observability fixes found by re-auditing the
+daemon loop, the logging pipeline and the test harness. Everything below is
+reproduced by a test or measured on macOS 25.6 (~960 processes), not inferred.
 
 ### Fixed
 - **A config reload no longer restarts every orphan's grace period.** The daemon
@@ -121,6 +122,14 @@ measured, not inferred.
   disagree with what a scan would select. Dropped `ProcessNode::cpu_percent`,
   which was never displayed and was always 0.0 anyway (a single refresh cannot
   produce a CPU delta).
+- **The declared MSRV is now actually verified — and it was wrong.** Adding the
+  CI job revealed that `rust-version = "1.82"` could not be satisfied at all:
+  `tracing-appender` pulled `time` 0.3.46 → `time-core` 0.1.8, which requires
+  rustc 1.88. `time` is pinned to 0.3.41 in the committed lockfile (5 packages
+  changed, all in the `time` family, used only for rolling log filenames), which
+  restores a working 1.82 build and keeps `cargo install` viable on older
+  toolchains. `Cargo.toml` records the constraint so a future dependency bump
+  that breaks it is understood rather than silently reverted.
 
 ## [0.8.3] - 2026-06-17
 

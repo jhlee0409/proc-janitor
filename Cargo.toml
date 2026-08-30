@@ -1,7 +1,12 @@
 [package]
 name = "proc-janitor"
-version = "0.8.3"
+version = "0.9.0"
 edition = "2021"
+# Verified in CI (the `msrv` job) against the committed Cargo.lock. If bumping a
+# dependency makes that job fail, either pin the dependency back in Cargo.lock or
+# raise this — do not leave it as an untested claim. Currently `time` is held at
+# 0.3.41 in the lockfile for exactly this reason: 0.3.46 pulls time-core 0.1.8,
+# which requires rustc 1.88.
 rust-version = "1.82"
 authors = ["Jack <jhlee0409@users.noreply.github.com>"]
 description = "Automatic orphan process cleaner daemon for macOS/Linux"

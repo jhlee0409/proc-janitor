@@ -136,6 +136,24 @@ pub enum Commands {
 
     /// Diagnose common issues and check system health
     Doctor,
+
+    /// Run a command that cannot outlive the terminal that started it
+    ///
+    /// Prevention instead of cleanup: proc-janitor watches its own parent (your
+    /// shell or terminal) and terminates the command's process tree the moment
+    /// that parent exits. No patterns, no grace period, no daemon required —
+    /// macOS's missing PR_SET_PDEATHSIG, built with kqueue.
+    ///
+    /// Example: proc-janitor exec -- claude
+    Exec {
+        /// Command and arguments to run (everything after `--`)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+
+        /// Seconds to wait after SIGTERM before SIGKILL (defaults to the config value)
+        #[arg(long)]
+        sigterm_timeout: Option<u64>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

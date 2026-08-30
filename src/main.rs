@@ -3,12 +3,14 @@ mod cli;
 mod config;
 mod daemon;
 mod doctor;
+mod exec;
 mod kill;
 mod logger;
 mod scanner;
 mod session;
 mod util;
 mod visualize;
+mod watch;
 
 use anyhow::Result;
 use clap::Parser;
@@ -16,7 +18,11 @@ use cli::{Cli, Commands, ConfigCommands, SessionCommands};
 use owo_colors::OwoColorize;
 use util::use_color;
 
-fn run() -> Result<()> {
+/// Runs the requested command.
+///
+/// `Ok(Some(code))` means the process must exit with exactly `code` — used by
+/// `exec`, which has to be transparent about the wrapped command's status.
+fn run() -> Result<Option<i32>> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -90,8 +96,13 @@ fn run() -> Result<()> {
                         let mem = format_bytes(orphan.memory_bytes);
                         let uptime = format_duration(orphan.uptime_seconds);
                         println!(
-                            "  PID {} - {} ({}  {})\n    Command: {}",
-                            orphan.pid, orphan.name, mem, uptime, orphan.cmdline
+                            "  PID {} - {} ({}  {}  {})\n    Command: {}",
+                            orphan.pid,
+                            orphan.name,
+                            mem,
+                            uptime,
+                            orphan.evidence.label(),
+                            orphan.cmdline
                         );
                     }
                     if use_color() {
@@ -344,9 +355,24 @@ fn run() -> Result<()> {
         Commands::Doctor => {
             doctor::run()?;
         }
+
+        Commands::Exec {
+            command,
+            sigterm_timeout,
+        } => {
+            exec::validate(&command)?;
+            // Fall back to the configured timeout, and to the built-in default
+            // when there is no usable config — `exec` must work before setup.
+            let timeout = sigterm_timeout.unwrap_or_else(|| {
+                config::Config::load()
+                    .map(|c| c.sigterm_timeout)
+                    .unwrap_or(5)
+            });
+            return Ok(Some(exec::run(&command, timeout)?));
+        }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -374,26 +400,33 @@ fn format_duration(secs: u64) -> String {
 }
 
 fn main() {
-    if let Err(e) = run() {
-        let err_str = format!("{e:#}");
-        if use_color() {
-            eprintln!("{} {}", "error:".red().bold(), err_str);
-        } else {
-            eprintln!("error: {err_str}");
-        }
+    match run() {
+        // `exec` propagates the wrapped command's status verbatim.
+        Ok(Some(code)) => std::process::exit(code),
+        Ok(None) => {}
+        Err(e) => {
+            let err_str = format!("{e:#}");
+            if use_color() {
+                eprintln!("{} {}", "error:".red().bold(), err_str);
+            } else {
+                eprintln!("error: {err_str}");
+            }
 
-        let err_str_lower = err_str.to_lowercase();
-        let code = if err_str_lower.contains("permission denied")
-            || err_str_lower.contains("operation not permitted")
-        {
-            3
-        } else if err_str_lower.contains("already running") {
-            4
-        } else if err_str_lower.contains("not running") || err_str_lower.contains("no such file") {
-            5
-        } else {
-            1
-        };
-        std::process::exit(code);
+            let err_str_lower = err_str.to_lowercase();
+            let code = if err_str_lower.contains("permission denied")
+                || err_str_lower.contains("operation not permitted")
+            {
+                3
+            } else if err_str_lower.contains("already running") {
+                4
+            } else if err_str_lower.contains("not running")
+                || err_str_lower.contains("no such file")
+            {
+                5
+            } else {
+                1
+            };
+            std::process::exit(code);
+        }
     }
 }

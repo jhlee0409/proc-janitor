@@ -26,7 +26,7 @@ You end up manually running `pkill -f claude` every few hours. proc-janitor auto
 ## How It Works
 
 ```
-Every 5 seconds (configurable):
+Discovery pass (every scan_interval, default 5s):
 
 1. Scan process table for PPID=1 processes
 2. Match against target patterns (regex)
@@ -34,7 +34,106 @@ Every 5 seconds (configurable):
 4. Wait grace period (default 30s) to avoid false positives
 5. Send SIGTERM → wait → SIGKILL if unresponsive
 6. Log everything
+
+Between passes the daemon is not merely asleep — it is watching:
+
+  • the PARENTS of processes that match a target but are not orphans yet
+    → their exit is the instant a process becomes an orphan
+  • tracked orphans themselves
+    → so one that exits on its own leaves the grace-period map immediately
 ```
+
+### Reacting without polling
+
+A process becoming an orphan is an *event*, and macOS will report it: kqueue's
+`EVFILT_PROC`/`NOTE_EXIT` watches any PID unprivileged. The daemon sleeps on
+those notifications instead of only on a timer, so it notices the moment your
+terminal dies rather than at the next tick.
+
+Measured end-to-end (parent killed → orphan cleaned), debug build:
+
+| `scan_interval` | Reaction |
+|-----------------|----------|
+| 5s | **30 ms** |
+| 30s | **31 ms** |
+| 60s | **29 ms** |
+
+Reaction no longer depends on the interval, which means the interval is now free
+to raise. The scan still bounds *discovery* — macOS has no unprivileged
+process-creation event (`EndpointSecurity` requires an entitlement, and kqueue's
+`NOTE_TRACK` returns `ENOTSUP`) — so a new process is picked up within one
+interval. But once it is known, its death link is instant. At `scan_interval = 60`
+the daemon does 1,440 scans a day instead of 17,280, with the same responsiveness.
+
+On platforms without kqueue this degrades to the plain interval sleep. Linux's
+own answer to the underlying problem is `PR_SET_PDEATHSIG`, which
+[`proc-janitor exec`](#prevention-proc-janitor-exec) uses directly.
+
+### Orphan Evidence
+
+`PPID == 1` is a weaker signal than it looks. Measured on macOS 25.6: **470 of the
+654 processes owned by the logged-in user already have PPID 1**, because launchd
+both reparents orphans *and* directly launches most agents and services. The
+PPID filter therefore removes under 30% of candidates, and safety rests almost
+entirely on your target patterns.
+
+The session id discriminates far better. Of those same 470 processes:
+
+| Session state | Count | What it usually means |
+|---------------|-------|-----------------------|
+| In init's session (`sid == 1`) | 283 | launchd/systemd-managed service |
+| Own session leader (`sid == pid`) | 179 | called `setsid()` — a detached daemon *or* a `disown`ed job |
+| **Session leader gone** | **8** | **a terminal exited and left this behind** |
+
+`scan` reports which of these applies to each detected process. Setting
+`require_dead_session = true` restricts cleanup to the last category — the actual
+signature of the problem this tool exists to solve. The trade-off: orphans that
+called `setsid()` become their own session leader and are then indistinguishable
+from an intentional daemon, so they are skipped.
+
+## Prevention: `proc-janitor exec`
+
+The daemon is cleanup — it finds processes that have *already* been orphaned and
+decides from regex patterns whether they should die. `exec` is prevention, and it
+needs no patterns at all:
+
+```bash
+proc-janitor exec -- claude
+```
+
+proc-janitor watches its own parent (your shell or terminal) and terminates the
+command's process tree the instant that parent exits. It knows exactly which
+process it started and exactly whose death should end it, so there is nothing to
+match and no false positive to worry about.
+
+```text
+terminal ──spawns──▶ proc-janitor exec ──spawns──▶ claude
+   │                        │
+   └── exits ───────────────┤  NOTE_EXIT (macOS) / PDEATHSIG (Linux)
+                            ▼
+                   SIGTERM → SIGKILL the process tree
+```
+
+Linux has a kernel mechanism for this, `prctl(PR_SET_PDEATHSIG)`. macOS does not
+— that is root cause #2 in [Why?](#why) above — but kqueue's
+`EVFILT_PROC`/`NOTE_EXIT` can watch any PID without privileges, so the same
+guarantee is available there. Measured on macOS 25.6: **0.22 ms** from the parent
+exiting to the notification arriving. No polling, no process-table scanning, no
+daemon required.
+
+`exec` is transparent: stdin/stdout/stderr are inherited and the command's exit
+code is propagated unchanged, so it composes with shell aliases and scripts.
+
+```bash
+alias claude='proc-janitor exec -- claude'
+```
+
+**Limitations.** A descendant that calls `setsid()` re-parents itself out of the
+tree and can no longer be reached from the command's PID — that is the case the
+pattern-matching daemon exists to cover, so the two are complementary. Signals
+are sent per PID with the same `start_time` identity verification the daemon
+uses, so a PID recycled between the process-tree snapshot and the signal is
+skipped rather than killed.
 
 ## Installation
 
@@ -216,6 +315,10 @@ whitelist = [
     "pm2",             # Process managers
 ]
 
+# Require evidence that the process's session is gone, not just PPID=1
+# (see "Orphan Evidence" below). Off by default.
+require_dead_session = false
+
 [logging]
 enabled = true
 path = "/Users/you/.proc-janitor/logs"  # absolute path required (~ not expanded)
@@ -235,6 +338,7 @@ Every config option can be overridden via environment variables. Values outside 
 | `PROC_JANITOR_SIGTERM_TIMEOUT` | 1–60 | `15` |
 | `PROC_JANITOR_TARGETS` | comma-separated regexes | `"python.*test,node.*dev"` |
 | `PROC_JANITOR_WHITELIST` | comma-separated regexes | `"safe1,safe2"` |
+| `PROC_JANITOR_REQUIRE_DEAD_SESSION` | `true` / `false` | `true` |
 | `PROC_JANITOR_LOG_ENABLED` | `true` / `false` | `false` |
 | `PROC_JANITOR_LOG_PATH` | path under `$HOME` | `"/Users/you/.proc-janitor/logs"` |
 | `PROC_JANITOR_LOG_RETENTION_DAYS` | 0–365 | `14` |
@@ -261,6 +365,7 @@ Every config option can be overridden via environment variables. Values outside 
 | `clean [--pid PIDs] [--pattern REGEX] [-i\|--interactive] [-d\|--dry-run] [-y\|--yes] [--min-age SECS]` | Kill orphaned target processes (all by default, or filter by PID/pattern/age). On an interactive terminal it lists the targets and asks for confirmation first; `-y` skips the prompt, `-i` confirms each kill, `-d` only shows what would be killed. |
 | `restart [-f\|--foreground] [-d\|--dry-run]` | Restart the daemon (stop + start) |
 | `reload` | Reload daemon configuration (sends SIGHUP, no restart needed) |
+| `exec [--sigterm-timeout SECS] -- <command>` | Run a command that cannot outlive the terminal that started it. See [Prevention](#prevention-proc-janitor-exec). |
 | `stats [--days N]` | Show cleanup statistics from the last N days (default: 7). Supports `--json`. |
 | `tree [-t\|--targets-only] [-m\|--pattern REGEX]` | Visualize process tree (optionally filter by regex pattern) |
 | `logs [-f\|--follow] [-n N]` | View logs (N: 1–10000, default 50) |
@@ -302,7 +407,7 @@ The daemon watches `config.toml` for changes and automatically reloads when the 
 
 ### Desktop Notifications (macOS)
 
-When the daemon kills orphaned processes, it sends a macOS notification via Notification Center showing the count and process names.
+When the daemon kills orphaned processes, it sends a macOS notification via Notification Center showing how many processes were cleaned.
 
 ### Cleanup Statistics
 
@@ -335,7 +440,8 @@ launchctl unload ~/Library/LaunchAgents/com.proc-janitor.plist
 - **Scan before clean** — `scan` is always safe (detection only), `clean` is always destructive (with optional filters)
 - **Atomic file operations** — config and session data use file locking with fsync for crash safety
 - **Directory permissions** — `~/.proc-janitor/` created with `0o700` (owner-only access)
-- **Audit logging** — every action is logged with timestamps
+- **Audit logging** — every termination is recorded to the rotating log (`~/.proc-janitor/logs/proc-janitor.<date>.log`, subject to `retention_days`) and to `stats.jsonl`, with timestamps, PID, and the signal used
+- **Supervisor logs are left alone** — `launchd.log` / `launchd.err` / `daemon.out` / `daemon.err` are written by launchd, systemd, or the daemonizer, which hold those files open; proc-janitor never rotates or deletes them (deleting a file the supervisor has open would silently discard all further output). They are unrotated, so `doctor` warns when one exceeds 10 MiB and tells you how to truncate it
 
 ## Architecture
 
@@ -348,12 +454,14 @@ proc-janitor/
 │   ├── scanner.rs     # Orphan process detection
 │   ├── cleaner.rs     # Process termination (SIGTERM/SIGKILL)
 │   ├── kill.rs        # Shared kill logic (system PID guard, PID reuse check, polling)
-│   ├── doctor.rs      # Health checks and diagnostics (8 checks)
+│   ├── doctor.rs      # Health checks and diagnostics (9 checks)
 │   ├── config.rs      # TOML config + env var overrides + presets
 │   ├── config_template.toml  # Commented config template (embedded at compile time)
 │   ├── logger.rs      # Structured logging with rotation
 │   ├── session.rs     # Session-based process tracking (TrackedPid with start_time)
-│   ├── util.rs        # Shared utilities (color detection, symlink protection)
+│   ├── util.rs        # Shared utilities (color, symlink protection, process snapshots)
+│   ├── watch.rs       # Event-driven exit notification (kqueue NOTE_EXIT)
+│   ├── exec.rs        # `exec`: parent-death link (macOS PR_SET_PDEATHSIG equivalent)
 │   └── visualize.rs   # ASCII process tree
 ├── resources/
 │   └── com.proc-janitor.plist  # LaunchAgent template

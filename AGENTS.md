@@ -35,22 +35,30 @@ Rust daemon + CLI that polls the process table to detect and kill orphaned proce
 ### Testing Requirements
 ```bash
 cargo build          # Must pass first
-cargo test           # 70 tests (60 unit + 10 integration)
+cargo test           # 119 tests (90 unit + 29 integration)
 cargo clippy         # Must be warning-free
 cargo fmt --check    # CI enforces formatting
 ```
 
 ### Common Patterns
 - File locking: `set_len(0)` + `seek(0)` + `write_all` + `sync_all` under exclusive lock
-- JSON in HTML: use `serde_json::json!()` and `escape_json_for_script()`
+- Log files: only `proc-janitor.<date>.log` is ours; supervisor redirect targets (`launchd.*`, `daemon.*`) must never be rotated or deleted
+- Process table access: `util::process_snapshot()` / `process_snapshot_for(pid)`, never
+  `ProcessRefreshKind::everything()` — it fetches cpu/disk/user/cwd/root/environ that nothing reads
+- Target/whitelist matching: one function, `scanner::matches_any`; `visualize` must use it so
+  `tree` cannot disagree with `scan`
 - Color output: `crate::util::use_color()` + `owo-colors` (conditional)
 - Symlink protection: `util::check_not_symlink()` before writing predictable paths
 - Config validation: boundary checks on all numeric values
 
 ### Key Design Decisions
 - `scan` = detection only (never kills), `clean` = execution (always kills, with optional filters)
-- Scanner is stateful in daemon mode (grace period tracking), stateless in CLI mode
+- Scanner is stateful in daemon mode (grace period tracking), stateless in CLI mode. Config reload MUST go through `Scanner::reconfigure` — replacing the `Scanner` drops `tracked`/`first_seen` and restarts every orphan's grace period
 - Two-phase kill: SIGTERM with 100ms polling, then SIGKILL after timeout
+- Every kill path MUST verify `start_time` before signalling a PID (PID reuse); `exec::signal_tree` and `kill::kill_process_with_sys` both do
+- `daemon`/`clean` = cleanup after the fact (pattern-based); `exec` = prevention (parent-death link, no patterns)
+- The scan interval bounds *discovery* only; reacting to orphaning is event-driven (`watch::ExitWaiter`, kqueue NOTE_EXIT). Never reintroduce a plain `thread::sleep` in the daemon loop
+- kqueue registration and waiting MUST be one `kevent` call: a separate registration call returns already-pending events in its own eventlist and silently drops them
 - Session subsystem is independent with its own JSON persistence + file locking
 
 ## Dependencies

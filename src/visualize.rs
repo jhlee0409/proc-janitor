@@ -7,7 +7,6 @@ use anyhow::Result;
 use owo_colors::OwoColorize;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
 use crate::config::Config;
 use crate::session::SessionStore;
@@ -22,8 +21,6 @@ pub struct ProcessNode {
     #[allow(dead_code)]
     pub cmdline: String,
     pub memory_mb: f64,
-    #[allow(dead_code)]
-    pub cpu_percent: f32,
     pub is_target: bool,      // Matches our target patterns
     pub is_whitelisted: bool, // In whitelist
     pub is_orphan: bool,      // PPID = 1
@@ -32,10 +29,7 @@ pub struct ProcessNode {
 
 /// Build process tree and identify targets
 pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+    let sys = crate::util::process_snapshot();
 
     // Load sessions to mark tracked processes
     let session_store = SessionStore::load().unwrap_or_default();
@@ -83,8 +77,10 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
             .collect::<Vec<_>>()
             .join(" ");
 
-        let is_target = matches_patterns(&cmdline, &target_patterns);
-        let is_whitelisted = matches_patterns(&cmdline, &whitelist_patterns);
+        // The same matcher the scanner uses, so the tree highlights exactly what
+        // a scan would select.
+        let is_target = crate::scanner::matches_any(&target_patterns, &cmdline);
+        let is_whitelisted = crate::scanner::matches_any(&whitelist_patterns, &cmdline);
         let is_orphan = ppid == 1;
 
         nodes.insert(
@@ -99,7 +95,6 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
                     cmdline
                 },
                 memory_mb: process.memory() as f64 / 1024.0 / 1024.0,
-                cpu_percent: process.cpu_usage(),
                 is_target,
                 is_whitelisted,
                 is_orphan,
@@ -109,21 +104,6 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
     }
 
     Ok(nodes)
-}
-
-fn matches_patterns(text: &str, patterns: &[Regex]) -> bool {
-    patterns.iter().any(|re| re.is_match(text))
-}
-
-/// Recursively collect all descendant PIDs of a given process
-fn collect_orphan_tree(pid: u32, children: &HashMap<u32, Vec<u32>>, result: &mut HashSet<u32>) {
-    if let Some(child_pids) = children.get(&pid) {
-        for &child in child_pids {
-            if result.insert(child) {
-                collect_orphan_tree(child, children, result);
-            }
-        }
-    }
 }
 
 // ============================================================================
@@ -165,7 +145,7 @@ pub fn print_tree(filter_targets: bool, pattern: Option<&str>) -> Result<()> {
     for node in targets.iter() {
         if node.is_orphan {
             orphan_tree_pids.insert(node.pid);
-            collect_orphan_tree(node.pid, &children, &mut orphan_tree_pids);
+            crate::util::collect_descendants(node.pid, &children, &mut orphan_tree_pids);
         }
     }
     let orphan_targets: Vec<_> = targets
@@ -507,19 +487,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_matches_patterns_basic() {
+    fn test_tree_uses_the_scanner_matcher() {
+        // `build_process_tree` must classify with `scanner::matches_any` so the
+        // tree cannot disagree with what a scan would select.
         let patterns = vec![
             Regex::new("node.*claude").unwrap(),
             Regex::new("python").unwrap(),
         ];
-        assert!(matches_patterns("node --experimental claude", &patterns));
-        assert!(matches_patterns("python script.py", &patterns));
-        assert!(!matches_patterns("cargo build", &patterns));
-    }
-
-    #[test]
-    fn test_matches_patterns_empty() {
-        let patterns: Vec<Regex> = vec![];
-        assert!(!matches_patterns("anything", &patterns));
+        assert!(crate::scanner::matches_any(
+            &patterns,
+            "node --experimental claude"
+        ));
+        assert!(crate::scanner::matches_any(&patterns, "python script.py"));
+        assert!(!crate::scanner::matches_any(&patterns, "cargo build"));
+        assert!(!crate::scanner::matches_any(&[], "anything"));
     }
 }

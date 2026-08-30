@@ -8,8 +8,11 @@
 # Auto-register terminal sessions
 # ============================================================================
 
-# Register a proc-janitor session when opening a new terminal
+# Register a proc-janitor session when opening a new terminal.
+# Guarded: registration is a subprocess that takes an exclusive lock on
+# sessions.json and rewrites it, so it must run once per shell, not per command.
 _proc_janitor_register_session() {
+    [ -n "$PROC_JANITOR_SESSION" ] && return 0
     if command -v proc-janitor &> /dev/null; then
         # Generate session ID from TTY and timestamp
         local tty_name=$(tty 2>/dev/null | tr '/' '_')
@@ -42,21 +45,18 @@ _proc_janitor_cleanup_session() {
 if [ -n "$ZSH_VERSION" ]; then
     # Zsh
     autoload -Uz add-zsh-hook
-    add-zsh-hook precmd _proc_janitor_register_session
     add-zsh-hook zshexit _proc_janitor_cleanup_session
 
-    # Only register once
-    if [ -z "$PROC_JANITOR_SESSION" ]; then
-        _proc_janitor_register_session
-    fi
+    # Register once at shell startup. Do NOT hook this into `precmd`: that runs
+    # before every prompt, and each run spawns proc-janitor and takes an
+    # exclusive lock on sessions.json — measurably slower prompts (~11ms) plus
+    # lock contention across open terminals, for no benefit.
+    _proc_janitor_register_session
 elif [ -n "$BASH_VERSION" ]; then
     # Bash
     trap _proc_janitor_cleanup_session EXIT
 
-    # Only register once
-    if [ -z "$PROC_JANITOR_SESSION" ]; then
-        _proc_janitor_register_session
-    fi
+    _proc_janitor_register_session
 fi
 
 # ============================================================================

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Command;
+use tempfile::TempDir;
 
 extern crate libc;
 
@@ -11,9 +12,30 @@ fn binary_path() -> PathBuf {
     path
 }
 
+/// A private `$HOME` for a single test.
+///
+/// Every path proc-janitor touches is derived from `$HOME`:
+/// `~/.config/proc-janitor/config.toml` and
+/// `~/.proc-janitor/{proc-janitor.pid,sessions.json,stats.jsonl,logs/}`.
+/// Running against the developer's real home made these tests mutate live state
+/// and race each other — a test that starts a daemon writes the PID file that
+/// `test_reload_when_not_running` asserts is absent, so the suite failed
+/// intermittently under the default test parallelism.
+fn sandbox() -> TempDir {
+    tempfile::tempdir().expect("Failed to create sandbox HOME")
+}
+
+/// A `proc-janitor` invocation pinned to a sandboxed `$HOME`.
+fn pj(home: &TempDir) -> Command {
+    let mut cmd = Command::new(binary_path());
+    cmd.env("HOME", home.path());
+    cmd
+}
+
 #[test]
 fn test_help_command() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("--help")
         .output()
         .expect("Failed to execute command");
@@ -26,7 +48,8 @@ fn test_help_command() {
 
 #[test]
 fn test_config_show() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("config")
         .arg("show")
         .output()
@@ -39,7 +62,8 @@ fn test_config_show() {
 
 #[test]
 fn test_scan_command() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("scan")
         .output()
         .expect("Failed to execute command");
@@ -49,7 +73,8 @@ fn test_scan_command() {
 
 #[test]
 fn test_scan_json_output() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("--json")
         .arg("scan")
         .output()
@@ -91,7 +116,8 @@ fn test_scan_json_output() {
 
 #[test]
 fn test_status_command() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("status")
         .output()
         .expect("Failed to execute command");
@@ -110,7 +136,8 @@ fn test_status_command() {
 
 #[test]
 fn test_session_list() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("session")
         .arg("list")
         .output()
@@ -121,7 +148,8 @@ fn test_session_list() {
 
 #[test]
 fn test_tree_command() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("tree")
         .output()
         .expect("Failed to execute command");
@@ -131,7 +159,8 @@ fn test_tree_command() {
 
 #[test]
 fn test_clean_command() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("clean")
         .output()
         .expect("Failed to execute command");
@@ -142,7 +171,8 @@ fn test_clean_command() {
 #[test]
 fn test_clean_dry_run() {
     // Dry-run must never kill anything and must succeed regardless of state.
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["clean", "--dry-run"])
         .output()
         .expect("Failed to execute command");
@@ -159,7 +189,8 @@ fn test_clean_dry_run() {
 
 #[test]
 fn test_clean_dry_run_json() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["--json", "clean", "--dry-run"])
         .output()
         .expect("Failed to execute command");
@@ -172,7 +203,8 @@ fn test_clean_dry_run_json() {
 
 #[test]
 fn test_clean_with_pid_filter() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["clean", "--pid", "99999"])
         .output()
         .expect("Failed to execute command");
@@ -182,7 +214,8 @@ fn test_clean_with_pid_filter() {
 
 #[test]
 fn test_clean_with_pattern_filter() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["clean", "--pattern", "nonexistent_process_xyz"])
         .output()
         .expect("Failed to execute command");
@@ -192,7 +225,8 @@ fn test_clean_with_pattern_filter() {
 
 #[test]
 fn test_version_command() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("version")
         .output()
         .expect("Failed to execute command");
@@ -205,7 +239,8 @@ fn test_version_command() {
 
 #[test]
 fn test_config_validate() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["config", "validate"])
         .output()
         .expect("Failed to execute command");
@@ -214,7 +249,7 @@ fn test_config_validate() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}{stderr}");
 
-    // Either valid config or no config file (CI has no config)
+    // Either valid config or no config file (a sandboxed HOME has none)
     assert!(
         combined.contains("valid") || combined.contains("Valid") || combined.contains("not found"),
         "Expected validation output, got: {combined}"
@@ -223,7 +258,8 @@ fn test_config_validate() {
 
 #[test]
 fn test_doctor_command() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("doctor")
         .output()
         .expect("Failed to execute command");
@@ -234,7 +270,8 @@ fn test_doctor_command() {
 #[test]
 fn test_daemon_foreground_dry_run() {
     // Start daemon in foreground + dry-run, kill it after 2 seconds
-    let child = std::process::Command::new(binary_path())
+    let home = sandbox();
+    let child = pj(&home)
         .args(["start", "--foreground", "--dry-run"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -264,7 +301,8 @@ fn test_daemon_foreground_dry_run() {
 
 #[test]
 fn test_scan_quiet_mode() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["--quiet", "scan"])
         .output()
         .expect("Failed to execute command");
@@ -277,7 +315,8 @@ fn test_scan_quiet_mode() {
 
 #[test]
 fn test_clean_quiet_mode() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["--quiet", "clean"])
         .output()
         .expect("Failed to execute command");
@@ -288,7 +327,8 @@ fn test_clean_quiet_mode() {
 #[test]
 fn test_restart_when_not_running() {
     // Restart when daemon isn't running should just start (or fail gracefully)
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["restart", "--foreground", "--dry-run"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -313,7 +353,8 @@ fn test_restart_when_not_running() {
 
 #[test]
 fn test_reload_when_not_running() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .arg("reload")
         .output()
         .expect("Failed to execute command");
@@ -329,7 +370,8 @@ fn test_reload_when_not_running() {
 
 #[test]
 fn test_stats_command() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["stats", "--days", "7"])
         .output()
         .expect("Failed to execute command");
@@ -345,7 +387,8 @@ fn test_stats_command() {
 
 #[test]
 fn test_stats_json() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["--json", "stats"])
         .output()
         .expect("Failed to execute command");
@@ -359,7 +402,8 @@ fn test_stats_json() {
 
 #[test]
 fn test_clean_min_age() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["clean", "--min-age", "999999"])
         .output()
         .expect("Failed to execute command");
@@ -370,7 +414,8 @@ fn test_clean_min_age() {
 
 #[test]
 fn test_tree_with_pattern() {
-    let output = Command::new(binary_path())
+    let home = sandbox();
+    let output = pj(&home)
         .args(["tree", "--pattern", "nonexistent_xyz"])
         .output()
         .expect("Failed to execute command");
@@ -378,4 +423,331 @@ fn test_tree_with_pattern() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No processes matching") || stdout.contains("nonexistent_xyz"));
+}
+
+/// Regression test for the reload path: a config reload must not restart every
+/// tracked orphan's grace period.
+///
+/// The daemon used to replace its `Scanner` wholesale on reload, dropping the
+/// `first_seen` timestamps with it, so a config file touched more often than
+/// `grace_period` postponed cleanup forever. Here the config is touched every
+/// second while `grace_period` is 3s; the orphan must still be cleaned.
+#[test]
+fn test_reload_preserves_grace_period() {
+    let home = sandbox();
+    let cfg_dir = home.path().join(".config").join("proc-janitor");
+    std::fs::create_dir_all(&cfg_dir).expect("Failed to create config dir");
+    let cfg_path = cfg_dir.join("config.toml");
+
+    // A unique marker so the pattern cannot match anything but our own child.
+    let marker = format!("pj_reload_probe_{}", std::process::id());
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "scan_interval = 1\n\
+             grace_period = 3\n\
+             sigterm_timeout = 2\n\
+             targets = [\"{marker}\"]\n\
+             whitelist = []\n\
+             \n\
+             [logging]\n\
+             enabled = false\n\
+             path = \"{}\"\n\
+             retention_days = 7\n",
+            home.path().join(".proc-janitor").join("logs").display()
+        ),
+    )
+    .expect("Failed to write config");
+
+    // An orphan (PPID=1) carrying the marker in its cmdline: a shell that
+    // double-forks so the sleeping grandchild is reparented to init/launchd.
+    // `: MARKER` keeps the marker in the inner shell's own cmdline and stops the
+    // shell from exec'ing away (a lone simple command would replace the shell).
+    let spawner = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "( sh -c 'sleep 30; : {marker}' >/dev/null 2>&1 & )"
+        ))
+        .status()
+        .expect("Failed to spawn orphan");
+    assert!(spawner.success(), "orphan spawner failed");
+
+    // Let the intermediate subshell exit so the probe is reparented to PID 1.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let probe = Command::new("pgrep")
+        .args(["-f", &marker])
+        .output()
+        .expect("Failed to run pgrep");
+    assert!(
+        !String::from_utf8_lossy(&probe.stdout).trim().is_empty(),
+        "probe orphan did not start"
+    );
+
+    let daemon = pj(&home)
+        .args(["start", "--foreground"])
+        // In a container every process has PPID=1, so the daemon refuses to act.
+        // The target pattern here is a marker unique to this test's own probe, so
+        // overriding the guard cannot touch anything else.
+        .env("PROC_JANITOR_ALLOW_CONTAINER", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to start daemon");
+
+    // Touch the config once per second for 8s: more often than grace_period.
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _ = filetime::set_file_mtime(&cfg_path, filetime::FileTime::now());
+    }
+
+    unsafe {
+        libc::kill(daemon.id() as i32, libc::SIGTERM);
+    }
+    let out = daemon
+        .wait_with_output()
+        .expect("Failed to wait for daemon");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Reap the probe (and any leftovers) before asserting, so a failing
+    // assertion never leaves a stray process behind.
+    let survivors = Command::new("pgrep")
+        .args(["-f", &marker])
+        .output()
+        .expect("Failed to run pgrep");
+    let survivors = String::from_utf8_lossy(&survivors.stdout);
+    for pid in survivors.split_whitespace() {
+        if let Ok(pid) = pid.parse::<i32>() {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+
+    // Make sure the scenario actually exercised the reload path.
+    assert!(
+        combined.contains("Config reloaded"),
+        "expected at least one reload, got: {combined}"
+    );
+    assert!(
+        combined.contains("terminated"),
+        "orphan was never cleaned despite repeated reloads; daemon output: {combined}"
+    );
+    assert!(
+        survivors.trim().is_empty(),
+        "orphan survived repeated config reloads (pids: {})",
+        survivors.trim()
+    );
+}
+
+/// Count processes whose command line contains `marker`.
+fn marker_count(marker: &str) -> usize {
+    let out = Command::new("pgrep")
+        .args(["-f", marker])
+        .output()
+        .expect("Failed to run pgrep");
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .count()
+}
+
+fn kill_marker(marker: &str) {
+    let out = Command::new("pgrep")
+        .args(["-f", marker])
+        .output()
+        .expect("Failed to run pgrep");
+    for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+        if let Ok(pid) = pid.parse::<i32>() {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+/// `exec` must terminate the command's tree when its own parent dies.
+///
+/// This is the guarantee the subcommand exists to provide — macOS has no
+/// `PR_SET_PDEATHSIG` — so it is exercised against real processes:
+///
+/// ```text
+/// sh (intermediate) ──▶ proc-janitor exec ──▶ sh (marker) ──▶ sleep
+/// ```
+///
+/// The intermediate `sh` is SIGKILLed, so it gets no chance to clean up after
+/// itself: anything that dies afterwards died because `exec` killed it.
+#[test]
+fn test_exec_kills_command_when_parent_dies() {
+    let home = sandbox();
+    let marker = format!("pjexec_parent_{}", std::process::id());
+    let binary = binary_path();
+
+    // The trailing `; :` stops `sh` from exec'ing away, so it stays alive as the
+    // parent of `proc-janitor exec`.
+    let mut intermediate = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "{} exec -- sh -c 'sleep 30; : {marker}' ; :",
+            binary.display()
+        ))
+        .env("HOME", home.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("Failed to spawn the intermediate shell");
+
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(
+        marker_count(&marker) > 0,
+        "the supervised command never started"
+    );
+
+    // Terminal vanishes.
+    unsafe {
+        libc::kill(intermediate.id() as i32, libc::SIGKILL);
+    }
+    let _ = intermediate.wait();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut remaining = marker_count(&marker);
+    while remaining > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        remaining = marker_count(&marker);
+    }
+
+    kill_marker(&marker);
+    assert_eq!(
+        remaining, 0,
+        "the supervised command outlived its terminal: {remaining} process(es) still matching {marker}"
+    );
+}
+
+/// The complement: while the parent is alive, `exec` must stay out of the way and
+/// pass the command's exit status through unchanged.
+#[test]
+fn test_exec_is_transparent_while_parent_lives() {
+    let home = sandbox();
+    let output = pj(&home)
+        .args(["exec", "--", "sh", "-c", "printf hello; exit 7"])
+        .output()
+        .expect("Failed to run exec");
+
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "exec must propagate the command's exit code"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello");
+}
+
+#[test]
+fn test_exec_requires_a_command() {
+    let home = sandbox();
+    let output = pj(&home).arg("exec").output().expect("Failed to run exec");
+    assert!(
+        !output.status.success(),
+        "exec with no command must fail instead of doing nothing"
+    );
+}
+
+/// The daemon must react to a process *becoming* an orphan without waiting for
+/// the next scan.
+///
+/// `scan_interval` is set to 60s and `grace_period` to 0. The daemon watches the
+/// parents of processes that match a target pattern (kqueue `NOTE_EXIT`), so when
+/// that parent is killed the orphan must be cleaned within seconds. If the event
+/// path regressed to plain polling this test would need a full minute and fail.
+#[test]
+fn test_daemon_reacts_before_the_next_scan() {
+    let home = sandbox();
+    let cfg_dir = home.path().join(".config").join("proc-janitor");
+    std::fs::create_dir_all(&cfg_dir).expect("Failed to create config dir");
+    let cfg_path = cfg_dir.join("config.toml");
+
+    let marker = format!("pjevent_probe_{}", std::process::id());
+    const SCAN_INTERVAL: u64 = 60;
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "scan_interval = {SCAN_INTERVAL}\n\
+             grace_period = 0\n\
+             sigterm_timeout = 2\n\
+             targets = [\"{marker}\"]\n\
+             whitelist = []\n\
+             \n\
+             [logging]\n\
+             enabled = false\n\
+             path = \"{}\"\n\
+             retention_days = 7\n",
+            home.path().join(".proc-janitor").join("logs").display()
+        ),
+    )
+    .expect("Failed to write config");
+
+    // A live parent holding a target-matching child. The daemon should register
+    // `NOTE_EXIT` on the parent during its first scan.
+    let mut parent = Command::new("sh")
+        .arg("-c")
+        .arg(format!("sh -c 'sleep 25; : {marker}' & sleep 120"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("Failed to spawn the probe parent");
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(marker_count(&marker) > 0, "the probe child never started");
+
+    let daemon = pj(&home)
+        .args(["start", "--foreground"])
+        .env("PROC_JANITOR_ALLOW_CONTAINER", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to start daemon");
+
+    // Let the first scan complete so the parent is registered for watching.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // The terminal dies.
+    let killed_at = std::time::Instant::now();
+    unsafe {
+        libc::kill(parent.id() as i32, libc::SIGKILL);
+    }
+    let _ = parent.wait();
+
+    // Generous relative to the event path (milliseconds), far under the 60s tick.
+    let budget = std::time::Duration::from_secs(15);
+    let deadline = killed_at + budget;
+    let mut child_procs = marker_count(&marker);
+    while child_procs > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        child_procs = marker_count(&marker);
+    }
+    let reacted_in = killed_at.elapsed();
+
+    unsafe {
+        libc::kill(daemon.id() as i32, libc::SIGTERM);
+    }
+    let out = daemon
+        .wait_with_output()
+        .expect("Failed to wait for daemon");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    kill_marker(&marker);
+
+    assert_eq!(
+        child_procs, 0,
+        "orphan was not cleaned within {budget:?} despite a {SCAN_INTERVAL}s scan interval — \
+         the daemon fell back to polling. Daemon output: {combined}"
+    );
+    assert!(
+        reacted_in < budget,
+        "reaction took {reacted_in:?}, expected well under the {SCAN_INTERVAL}s scan interval"
+    );
 }

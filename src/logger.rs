@@ -7,6 +7,24 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 use crate::config::{Config, LoggingConfig};
 
+/// True for a file produced by this process's rolling appender
+/// (`proc-janitor.YYYY-MM-DD.log`).
+///
+/// Everything else in the log directory belongs to the service supervisor —
+/// launchd's `StandardOutPath`/`StandardErrorPath` (`launchd.log`/`launchd.err`)
+/// and the `daemonize` redirects (`daemon.out`/`daemon.err`). Those fds are held
+/// open by launchd/systemd for the daemon's whole lifetime, so unlinking one
+/// silently routes all further output to a deleted inode. They are the
+/// supervisor's files: never rotate, delete, or tail them here.
+fn is_rotating_log(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("proc-janitor.") && n.ends_with(".log"))
+}
+
 /// Initialize the logger (loads config automatically)
 pub fn init_logger() -> Result<()> {
     let config = Config::load()?;
@@ -81,16 +99,7 @@ fn cleanup_old_logs_with_params(path: &Path, retention_days: u32) -> Result<()> 
         let entry = entry?;
         let file_path = entry.path();
 
-        // Only process log files
-        if !file_path.is_file() {
-            continue;
-        }
-
-        if let Some(ext) = file_path.extension() {
-            if ext != "log" {
-                continue;
-            }
-        } else {
+        if !is_rotating_log(&file_path) {
             continue;
         }
 
@@ -137,7 +146,7 @@ pub fn show_logs(follow: bool, lines: u64) -> Result<()> {
     let mut log_files: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|ext| ext == "log"))
+        .filter(|p| is_rotating_log(p))
         .collect();
 
     if log_files.is_empty() {
@@ -235,31 +244,70 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let log_path = temp_dir.path();
 
-        // Create some old log files
-        let old_file = log_path.join("old.log");
-        let mut f = File::create(&old_file)?;
-        writeln!(f, "old log")?;
-
-        // Set file time to 10 days ago
         let ten_days_ago =
             std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 60 * 60);
-        filetime::set_file_mtime(
-            &old_file,
-            filetime::FileTime::from_system_time(ten_days_ago),
-        )?;
+        let backdate = |p: &std::path::Path| -> Result<()> {
+            filetime::set_file_mtime(p, filetime::FileTime::from_system_time(ten_days_ago))?;
+            Ok(())
+        };
+        let touch = |name: &str| -> Result<std::path::PathBuf> {
+            let p = log_path.join(name);
+            let mut f = File::create(&p)?;
+            writeln!(f, "{name}")?;
+            Ok(p)
+        };
 
-        // Create a recent log file
-        let recent_file = log_path.join("recent.log");
-        let mut f = File::create(&recent_file)?;
-        writeln!(f, "recent log")?;
+        // Our own rotated file, old enough to expire.
+        let old_file = touch("proc-janitor.2020-01-01.log")?;
+        backdate(&old_file)?;
 
-        // Clean up logs older than 7 days
+        // Our own current file.
+        let recent_file = touch("proc-janitor.2999-12-31.log")?;
+
+        // The supervisor's redirect targets. launchd/systemd hold these fds open
+        // for the daemon's whole lifetime, so unlinking one would silently send
+        // every later write to a deleted inode. They must survive regardless of
+        // age, even though `launchd.log` ends in `.log`.
+        let launchd_out = touch("launchd.log")?;
+        let launchd_err = touch("launchd.err")?;
+        let daemon_out = touch("daemon.out")?;
+        backdate(&launchd_out)?;
+        backdate(&launchd_err)?;
+        backdate(&daemon_out)?;
+
         cleanup_old_logs_with_params(log_path, 7)?;
 
-        // Old file should be deleted
-        assert!(!old_file.exists());
-        // Recent file should still exist
-        assert!(recent_file.exists());
+        assert!(!old_file.exists(), "expired rotated log should be deleted");
+        assert!(recent_file.exists(), "current rotated log should survive");
+        assert!(launchd_out.exists(), "launchd.log is not ours to delete");
+        assert!(launchd_err.exists(), "launchd.err is not ours to delete");
+        assert!(daemon_out.exists(), "daemon.out is not ours to delete");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_rotating_log_discriminates_supervisor_files() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let dir = temp_dir.path();
+        for name in [
+            "proc-janitor.2026-01-01.log",
+            "launchd.log",
+            "launchd.err",
+            "daemon.out",
+            "notes.txt",
+        ] {
+            File::create(dir.join(name))?;
+        }
+
+        assert!(is_rotating_log(&dir.join("proc-janitor.2026-01-01.log")));
+        assert!(!is_rotating_log(&dir.join("launchd.log")));
+        assert!(!is_rotating_log(&dir.join("launchd.err")));
+        assert!(!is_rotating_log(&dir.join("daemon.out")));
+        assert!(!is_rotating_log(&dir.join("notes.txt")));
+        // A directory named like a log file is not a log file.
+        fs::create_dir(dir.join("proc-janitor.dir.log"))?;
+        assert!(!is_rotating_log(&dir.join("proc-janitor.dir.log")));
 
         Ok(())
     }

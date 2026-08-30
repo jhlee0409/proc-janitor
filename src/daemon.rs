@@ -9,7 +9,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Maximum number of polling iterations when waiting for daemon to stop
@@ -42,7 +42,10 @@ pub struct Daemon {
     scanner: Scanner,
     running: Arc<AtomicBool>,
     reload_requested: Arc<AtomicBool>,
-    condvar: Arc<(Mutex<bool>, Condvar)>,
+    /// Ends the interval sleep early when a watched process exits or a signal
+    /// arrives. See [`crate::watch`].
+    waiter: crate::watch::ExitWaiter,
+    waker: crate::watch::Waker,
     config_mtime: Option<std::time::SystemTime>,
     dry_run: bool,
 }
@@ -66,20 +69,23 @@ fn classify_signal(sig: i32) -> Option<SignalAction> {
 }
 
 impl Daemon {
-    pub fn new(config: Config, scanner: Scanner, dry_run: bool) -> Self {
+    pub fn new(config: Config, scanner: Scanner, dry_run: bool) -> Result<Self> {
         let config_mtime = crate::config::config_path()
             .ok()
             .and_then(|p| fs::metadata(p).ok())
             .and_then(|m| m.modified().ok());
-        Self {
+        let waiter = crate::watch::waiter()?;
+        let waker = waiter.waker();
+        Ok(Self {
             config,
             scanner,
             running: Arc::new(AtomicBool::new(false)),
             reload_requested: Arc::new(AtomicBool::new(false)),
-            condvar: Arc::new((Mutex::new(false), Condvar::new())),
+            waiter,
+            waker,
             config_mtime,
             dry_run,
-        }
+        })
     }
 
     /// Check if config file has been modified and reload if so
@@ -95,33 +101,30 @@ impl Daemon {
         }
     }
 
-    /// Reload configuration and rebuild the scanner. Shared by the config-file
-    /// mtime watcher and explicit SIGHUP reload requests.
+    /// Reload configuration in place. Shared by the config-file mtime watcher and
+    /// explicit SIGHUP reload requests.
+    ///
+    /// The scanner is reconfigured rather than rebuilt so grace-period tracking
+    /// (`first_seen` per orphan) survives the reload; rebuilding it would restart
+    /// every orphan's grace period on each reload.
     fn reload_config(&mut self) {
         match Config::load() {
-            Ok(new_config) => match Scanner::new(new_config.clone()) {
-                Ok(new_scanner) => {
+            Ok(new_config) => match self.scanner.reconfigure(new_config.clone()) {
+                Ok(()) => {
                     eprintln!("Config reloaded successfully.");
+                    tracing::info!("Configuration reloaded");
                     self.config = new_config;
-                    self.scanner = new_scanner;
                 }
                 Err(e) => {
                     eprintln!("Config reload failed (invalid patterns): {e}");
+                    tracing::warn!("Config reload failed (invalid patterns): {e}");
                 }
             },
             Err(e) => {
                 eprintln!("Config reload failed: {e}");
+                tracing::warn!("Config reload failed: {e}");
             }
         }
-    }
-
-    /// Interruptible sleep
-    fn sleep_interruptible(&self, duration: Duration) {
-        let (lock, cvar) = &*self.condvar;
-        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = cvar
-            .wait_timeout(guard, duration)
-            .unwrap_or_else(|e| e.into_inner());
     }
 
     pub fn start(&mut self) -> Result<()> {
@@ -139,7 +142,7 @@ impl Daemon {
         // shutdown handler, so `proc-janitor reload` killed the daemon.)
         let running = Arc::clone(&self.running);
         let reload_requested = Arc::clone(&self.reload_requested);
-        let condvar = Arc::clone(&self.condvar);
+        let waker = self.waker.clone();
         let mut signals = signal_hook::iterator::Signals::new([
             signal_hook::consts::SIGINT,
             signal_hook::consts::SIGTERM,
@@ -163,11 +166,8 @@ impl Daemon {
                     }
                     None => continue,
                 }
-                // Wake up the daemon immediately so it acts on the signal.
-                let (lock, cvar) = &*condvar;
-                let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-                *guard = true;
-                cvar.notify_one();
+                // Wake the daemon immediately so it acts on the signal.
+                waker.wake();
             }
         });
 
@@ -225,8 +225,17 @@ impl Daemon {
                 _ => {}
             }
 
-            // Use interruptible sleep instead of thread::sleep
-            self.sleep_interruptible(Duration::from_secs(self.config.scan_interval));
+            // Sleep until the next tick, a watched process exits, or a signal
+            // arrives. The tick still bounds discovery — macOS has no
+            // unprivileged process-creation event — but reacting to a process
+            // being orphaned no longer has to wait for it.
+            let outcome = self.waiter.wait(
+                self.scanner.watch_pids(),
+                Duration::from_secs(self.config.scan_interval),
+            );
+            if outcome == crate::watch::Wake::ProcessExited {
+                tracing::debug!("watched process exited; scanning early");
+            }
         }
 
         println!("Daemon stopped.");
@@ -628,7 +637,7 @@ pub fn start(foreground: bool, dry_run: bool) -> Result<()> {
         write_pid_file(std::process::id())?;
 
         // Create and start daemon
-        let mut daemon = Daemon::new(config, scanner, dry_run);
+        let mut daemon = Daemon::new(config, scanner, dry_run)?;
         daemon.start()?;
 
         // Cleanup on exit
@@ -642,7 +651,7 @@ pub fn start(foreground: bool, dry_run: bool) -> Result<()> {
 
         // Create and start daemon
         // Note: lock_file is kept open and locked until this process exits
-        let mut daemon = Daemon::new(config, scanner, dry_run);
+        let mut daemon = Daemon::new(config, scanner, dry_run)?;
         daemon.start()?;
 
         // Cleanup on exit
@@ -664,11 +673,7 @@ pub fn stop() -> Result<()> {
 
         // Verify PID identity before sending signals
         {
-            use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
-            let mut sys = System::new_with_specifics(
-                RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-            );
-            sys.refresh_processes(ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
+            let sys = crate::util::process_snapshot_for(pid);
 
             if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
                 let name = process.name().to_string_lossy().to_string();

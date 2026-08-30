@@ -6,6 +6,52 @@ pub fn use_color() -> bool {
         && supports_color::on(supports_color::Stream::Stdout).is_some()
 }
 
+/// The set of process fields proc-janitor actually reads.
+///
+/// `pid`, `parent`, `name` and `start_time` are always retrieved by any refresh;
+/// only `memory` and `cmd` have to be requested. `ProcessRefreshKind::everything()`
+/// would additionally fetch cpu usage, disk usage, user ids, cwd, root and the
+/// full environment — on macOS each of those is extra per-process syscall work,
+/// and none of it is ever read. Measured on a 960-process machine: a full-table
+/// refresh costs 6.40 ms with `everything()` versus 2.76 ms with this kind.
+///
+/// `cmd` is `Always`, not `OnlyIfNotSet`: target matching runs against the
+/// command line, so a reused PID must never be matched against the previous
+/// occupant's cached `cmd`.
+pub fn process_refresh_kind() -> sysinfo::ProcessRefreshKind {
+    sysinfo::ProcessRefreshKind::new()
+        .with_memory()
+        .with_cmd(sysinfo::UpdateKind::Always)
+}
+
+/// A fresh, fully-refreshed process table for one-shot (CLI) use.
+///
+/// The daemon keeps a long-lived `System` instead, so it pays only the refresh
+/// cost per cycle rather than reallocating the whole table.
+pub fn process_snapshot() -> sysinfo::System {
+    let kind = process_refresh_kind();
+    let mut sys =
+        sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new().with_processes(kind));
+    sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, kind);
+    sys
+}
+
+/// A process table refreshed for a single PID only.
+///
+/// Used for identity checks (`start_time` lookups) where the whole table is
+/// irrelevant. sysinfo still enumerates PIDs to drop dead entries, so this is
+/// cheaper but not free (measured 3.34 ms versus 6.40 ms for a full refresh).
+pub fn process_snapshot_for(pid: u32) -> sysinfo::System {
+    let kind = process_refresh_kind();
+    let mut sys =
+        sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new().with_processes(kind));
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+        kind,
+    );
+    sys
+}
+
 /// Check that a path is not a symlink. Returns an error if it is.
 /// This prevents symlink attacks where a local attacker creates a symlink
 /// at a predictable path to trick proc-janitor into overwriting arbitrary files.

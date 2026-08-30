@@ -65,15 +65,16 @@ pub fn clean_process_with_sys(
     eprintln!("Cleaning process {pid}...");
     match crate::kill::kill_process_with_sys(sys, pid, Some(start_time), sigterm_timeout) {
         Ok(signal) => {
-            eprintln!(
-                "Process {} terminated ({})",
-                pid,
-                if signal == Signal::SIGKILL {
-                    "forced"
-                } else {
-                    "graceful"
-                }
-            );
+            let mode = if signal == Signal::SIGKILL {
+                "forced"
+            } else {
+                "graceful"
+            };
+            eprintln!("Process {pid} terminated ({mode})");
+            // Audit record. `eprintln!` above is progress output for an
+            // interactive caller and bypasses the logger entirely, so the
+            // rotating log / journal only gets a record if we emit it here.
+            tracing::info!(pid, signal = ?signal, mode, "terminated orphaned process");
             Ok(CleanResult {
                 pid,
                 name: String::new(),
@@ -104,9 +105,7 @@ pub fn clean_process(
     sigterm_timeout: u64,
     dry_run: bool,
 ) -> Result<CleanResult> {
-    let mut sys = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::everything()),
-    );
+    let mut sys = crate::util::process_snapshot();
     clean_process_with_sys(&mut sys, pid, start_time, sigterm_timeout, dry_run)
 }
 
@@ -117,9 +116,7 @@ pub fn clean_all(
     dry_run: bool,
 ) -> Result<Vec<CleanResult>> {
     let mut results = Vec::new();
-    let mut sys = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::everything()),
-    );
+    let mut sys = crate::util::process_snapshot();
 
     for orphan in orphans {
         match clean_process_with_sys(
@@ -349,6 +346,7 @@ mod tests {
             start_time: 0,
             memory_bytes: 0,
             uptime_seconds: 0,
+            evidence: crate::scanner::OrphanEvidence::DeadSession,
         }];
         let results = clean_all(&orphans, 5, true).unwrap();
         assert_eq!(results.len(), 1);

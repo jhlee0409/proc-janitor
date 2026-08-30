@@ -11,7 +11,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::Read as _;
 use std::path::PathBuf;
-use sysinfo::{ProcessRefreshKind, RefreshKind, System};
+use sysinfo::System;
 
 /// Maximum number of sessions to prevent unbounded growth
 const MAX_SESSIONS: usize = 1000;
@@ -389,10 +389,7 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
         .unwrap_or(5);
 
     // Get current process list
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+    let mut sys = crate::util::process_snapshot();
 
     // Find all descendant processes
     let root_pids: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
@@ -514,10 +511,7 @@ pub fn auto_clean(dry_run: bool) -> Result<()> {
         .unwrap_or(5);
 
     // Find stale sessions first
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+    let mut sys = crate::util::process_snapshot();
 
     let stale_ids: Vec<String> = store
         .sessions
@@ -618,12 +612,7 @@ fn uuid_v4() -> String {
 /// Capture a process's start_time (Unix seconds) for PID-reuse detection.
 /// Returns None if the PID is not present in the process table.
 fn capture_start_time(pid: u32) -> Option<u64> {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(
-        pid,
-    )]));
+    let sys = crate::util::process_snapshot_for(pid);
     sys.process(sysinfo::Pid::from_u32(pid))
         .map(|p| p.start_time())
 }

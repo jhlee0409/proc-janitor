@@ -239,6 +239,71 @@ fn check_log_directory() -> bool {
     }
 }
 
+/// Files the service supervisor writes and owns: launchd's
+/// `StandardOutPath`/`StandardErrorPath` and the `daemonize` redirects.
+const SUPERVISOR_LOG_FILES: &[&str] = &["launchd.log", "launchd.err", "daemon.out", "daemon.err"];
+
+const SUPERVISOR_LOG_WARN_BYTES: u64 = 10 * 1024 * 1024;
+
+/// The rotating appender only manages `proc-janitor.<date>.log`, and retention
+/// deliberately never unlinks the supervisor's files — the supervisor holds those
+/// fds open for the daemon's whole lifetime, so deleting one would silently route
+/// all further output to a deleted inode. They therefore grow without bound and
+/// only the user can truncate them.
+fn check_supervisor_logs() -> bool {
+    let log_dir = match data_dir() {
+        Some(d) => d.join("logs"),
+        None => {
+            fail(
+                "Supervisor logs",
+                "Cannot determine path (HOME not set)",
+                Some("Set the HOME environment variable"),
+            );
+            return false;
+        }
+    };
+
+    let mut oversized: Vec<(String, u64)> = Vec::new();
+    let mut total = 0u64;
+    for name in SUPERVISOR_LOG_FILES {
+        let path = log_dir.join(name);
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        let len = meta.len();
+        total += len;
+        if len >= SUPERVISOR_LOG_WARN_BYTES {
+            oversized.push(((*name).to_string(), len));
+        }
+    }
+
+    let mib = |b: u64| format!("{:.1} MiB", b as f64 / (1024.0 * 1024.0));
+
+    if oversized.is_empty() {
+        pass(
+            "Supervisor logs",
+            &format!("{} (unrotated, not managed by retention)", mib(total)),
+        );
+        return true;
+    }
+
+    let detail = oversized
+        .iter()
+        .map(|(name, len)| format!("{name} is {}", mib(*len)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let fix = format!(
+        "Truncate in place (keeps the supervisor's open fd valid): {}",
+        oversized
+            .iter()
+            .map(|(name, _)| format!(": > {}", log_dir.join(name).display()))
+            .collect::<Vec<_>>()
+            .join(" ; ")
+    );
+    fail("Supervisor logs", &detail, Some(&fix));
+    false
+}
+
 fn check_pid_file() -> bool {
     let pid_file = match dirs::home_dir() {
         Some(h) => h.join(".proc-janitor").join("proc-janitor.pid"),
@@ -347,7 +412,7 @@ pub fn run() -> Result<()> {
     println!();
 
     let mut passed = 0;
-    let total = 8;
+    let total = 9;
 
     if check_config_file() {
         passed += 1;
@@ -362,6 +427,9 @@ pub fn run() -> Result<()> {
         passed += 1;
     }
     if check_log_directory() {
+        passed += 1;
+    }
+    if check_supervisor_logs() {
         passed += 1;
     }
     if check_pid_file() {
@@ -424,12 +492,12 @@ mod tests {
 
     #[test]
     fn test_run_total_matches_check_count() {
-        // The run() function declares total = 8 and calls exactly 8 check functions.
-        // This test verifies the constant is correct by parsing the source.
-        // If someone adds a check but forgets to update total, this catches it.
+        // `run()` declares `total` and then calls exactly that many check
+        // functions. Both numbers are read out of the source so that adding a
+        // check without updating `total` (or vice versa) fails here instead of
+        // silently reporting "8/9 checks passed".
         let source = include_str!("doctor.rs");
 
-        // Extract only the run() function body (up to #[cfg(test)] or end)
         let run_fn_start = source
             .find("pub fn run()")
             .expect("run() function not found");
@@ -439,9 +507,18 @@ mod tests {
             None => run_body,
         };
 
+        let declared_total: usize = run_body
+            .split("let total = ")
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .expect("`let total = N;` not found in run()")
+            .trim()
+            .parse()
+            .expect("`total` is not a number");
+
         let check_calls = run_body.matches("if check_").count();
         assert_eq!(
-            check_calls, 8,
+            check_calls, declared_total,
             "Number of check calls in run() should match total"
         );
     }

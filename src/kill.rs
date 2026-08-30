@@ -34,9 +34,7 @@ pub fn verify_process_identity_with_sys(
 /// Verify that a process still has the same identity (start_time) to mitigate PID reuse
 #[cfg(test)]
 pub fn verify_process_identity(pid: u32, expected_start_time: u64) -> bool {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
+    let mut sys = crate::util::process_snapshot();
     verify_process_identity_with_sys(&mut sys, pid, expected_start_time)
 }
 
@@ -135,9 +133,7 @@ pub fn kill_process(
     start_time: Option<u64>,
     sigterm_timeout_secs: u64,
 ) -> Result<Signal> {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
+    let mut sys = crate::util::process_snapshot();
     kill_process_with_sys(&mut sys, pid, start_time, sigterm_timeout_secs)
 }
 

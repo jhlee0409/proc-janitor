@@ -5,6 +5,123 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Reliability and observability fixes found by re-auditing the daemon loop, the
+logging pipeline, and the test harness. All of these are reproduced by tests or
+measured, not inferred.
+
+### Fixed
+- **A config reload no longer restarts every orphan's grace period.** The daemon
+  replaced its whole `Scanner` on reload, discarding the `first_seen` timestamps
+  with it. Any config file touched more often than `grace_period` — editor
+  autosave, `config edit`, a `reload` loop — silently postponed cleanup forever
+  (measured: `grace_period = 8`, config touched every 3s, orphan survived
+  indefinitely). Reload now goes through `Scanner::reconfigure`, which recompiles
+  the patterns before mutating anything and keeps the tracking map. Covered by
+  `test_reload_preserves_grace_period`.
+- **Terminations are now in the audit log.** Every kill was reported with
+  `eprintln!`, which bypasses the logger, so the rotating log under
+  `~/.proc-janitor/logs/` contained nothing but "Logger initialized" while the
+  actual record went to the supervisor's stderr file. `cleaner` now emits a
+  `tracing::info!` record (pid, signal, graceful/forced) alongside the progress
+  output, and config reloads/failures are logged too.
+- **Log retention no longer deletes the supervisor's files.** The cleanup pass
+  removed any `*.log` older than `retention_days`, which included launchd's
+  `StandardOutPath` (`launchd.log`). launchd holds that fd open for the daemon's
+  whole lifetime, so unlinking it silently routed all further output to a deleted
+  inode. Retention and `proc-janitor logs` now only consider this process's own
+  `proc-janitor.<date>.log` files.
+- **Integration tests are isolated from the developer's real `$HOME`.** Every
+  test now runs the binary against a private temporary `$HOME`. Previously they
+  read and wrote live state (`~/.config/proc-janitor/config.toml`,
+  `~/.proc-janitor/{proc-janitor.pid,sessions.json,logs/}`) and raced each other:
+  a test that started a daemon wrote the PID file that
+  `test_reload_when_not_running` asserts is absent, so `cargo test` failed
+  intermittently under the default parallelism (reproduced; passed with
+  `--test-threads=1`).
+- Shell integration registered a session from zsh's `precmd`, spawning a
+  `proc-janitor` process and taking an exclusive lock on `sessions.json` **before
+  every prompt** (~11 ms of added prompt latency, plus cross-terminal lock
+  contention). Registration now happens once per shell and is guarded inside the
+  function.
+
+### Added
+- **The daemon reacts to orphaning as an event instead of waiting for the next
+  scan.** A process becoming an orphan is observable: kqueue
+  `EVFILT_PROC`/`NOTE_EXIT` watches any PID unprivileged. Each scan now also
+  registers the *parents* of target-matching processes that are not orphans yet
+  (their exit is exactly the moment one becomes an orphan) plus the tracked
+  orphans themselves, and the daemon sleeps on those notifications as well as the
+  interval timer.
+
+  Measured end-to-end, parent killed → orphan cleaned: **30 ms at
+  `scan_interval = 5`, 31 ms at 30, 29 ms at 60** — reaction no longer depends on
+  the interval at all, where previously it was bounded by it. The scan still
+  bounds *discovery* (macOS has no unprivileged process-creation event:
+  `EndpointSecurity` needs an entitlement and `NOTE_TRACK` returns `ENOTSUP`,
+  verified), so raising `scan_interval` now trades discovery latency for CPU
+  rather than responsiveness — 1,440 scans a day instead of 17,280 at 60s.
+
+  The grace period is unchanged: it still runs from the first sighting of a
+  process as an orphan. Watching the parent only makes that first sighting prompt.
+  Watches are capped at 1,024 PIDs, and exceeding the cap is logged rather than
+  absorbed. Platforms without kqueue keep the previous interval sleep.
+- **`proc-janitor exec -- <command>`: prevention instead of cleanup.** The
+  command's process tree is terminated the moment proc-janitor's own parent (the
+  shell or terminal) exits, so nothing has to be pattern-matched after the fact
+  and there is no false positive to guard against. Linux gets this from
+  `prctl(PR_SET_PDEATHSIG)`; macOS has no equivalent — the root cause this
+  project exists for — so the same guarantee is built on kqueue
+  `EVFILT_PROC`/`NOTE_EXIT`, which can watch an arbitrary PID unprivileged
+  (verified on macOS 25.6, including root-owned and other-user PIDs) and
+  delivers in ~0.22 ms. No polling and no process-table scanning in this path.
+  `exec` inherits stdio and propagates the command's exit code unchanged, so
+  `alias claude='proc-janitor exec -- claude'` works.
+
+  Signals go to each PID in the tree with the same `start_time` identity
+  verification the daemon uses, deepest process first; a PID recycled between
+  the tree snapshot and the signal is skipped rather than killed. The child is
+  deliberately left in the terminal's process group — putting it in its own
+  group would take it out of the foreground group and an interactive command
+  would stop with SIGTTIN on its first terminal read.
+- **Orphan evidence, and an option to require it.** `PPID == 1` turns out to be a
+  weak signal: measured on macOS 25.6, 470 of the 654 processes owned by the
+  logged-in user already have PPID 1, so the filter discards under 30% of
+  candidates and safety rests almost entirely on the target regex. `scan` now
+  reports *why* each process looks orphaned from its session id — session leader
+  gone / own session leader / init session / session leader alive — and the new
+  `require_dead_session` option (env: `PROC_JANITOR_REQUIRE_DEAD_SESSION`,
+  default off) restricts cleanup to processes whose session leader has actually
+  exited. On the same machine that is 8 of the 470. `getsid()` is one syscall and
+  works across users, and it only runs for candidates that already matched a
+  target pattern.
+- `doctor` check for the supervisor's unrotated log files (`launchd.log`,
+  `launchd.err`, `daemon.out`, `daemon.err`). They are deliberately outside the
+  retention policy, so they grow without bound; the check warns past 10 MiB and
+  prints the truncation command that keeps the supervisor's open fd valid.
+- CI job verifying the declared MSRV (1.82) on macOS and Linux. It was previously
+  an unchecked claim — only stable was built.
+
+### Changed
+- **The daemon uses less than half the CPU per scan.** It built a whole new
+  process table every cycle with `ProcessRefreshKind::everything()`, which also
+  fetched cpu usage, disk usage, user ids, cwd, root and the full environment of
+  every process — none of which is ever read. The daemon now keeps one long-lived
+  `System` and refreshes only `memory` and `cmd`. Measured over 30 scans (~970
+  processes, `getrusage`): **82.6 → 38.6 ms of CPU per scan** and peak RSS
+  **16.8 → 12.7 MB**, reproduced across runs. At the default 5s interval that is
+  ~12 minutes of CPU per day. The `everything()` pattern was copy-pasted at eight
+  call sites; they now share `util::process_snapshot()` /
+  `util::process_snapshot_for(pid)`, and single-PID identity lookups no longer
+  refresh the whole table.
+- `visualize` no longer has its own copy of target matching and descendant
+  collection: `tree` and `scan` now classify through the same
+  `scanner::matches_any` and `util::collect_descendants`, so the tree cannot
+  disagree with what a scan would select. Dropped `ProcessNode::cpu_percent`,
+  which was never displayed and was always 0.0 anyway (a single refresh cannot
+  produce a CPU delta).
+
 ## [0.8.3] - 2026-06-17
 
 Follow-up to the 0.8.2 audit fixes — closes the remaining medium/low items.

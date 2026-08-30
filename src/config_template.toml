@@ -7,6 +7,11 @@
 # ─── Scan Settings ───────────────────────────────────────────────────────────
 
 # How often the daemon scans for orphaned processes (seconds, 1-3600)
+#
+# This bounds *discovery* only: how long until a newly started process is known
+# to the daemon. Reacting to a known process being orphaned is event-driven
+# (kqueue NOTE_EXIT on its parent) and takes milliseconds regardless of this
+# value, so raising it trades discovery latency for CPU, not responsiveness.
 scan_interval = 5
 
 # Time to wait before killing a newly detected orphan (seconds, 0-3600)
@@ -38,6 +43,22 @@ sigterm_timeout = 5
 #   "node.*next"      - protect Next.js dev server
 
 {whitelist}
+
+# ─── Orphan Evidence ────────────────────────────────────────────────────────
+# By default a process is a candidate as soon as its PPID is 1. On macOS that
+# is a weak signal: launchd both reparents orphans and directly launches most
+# agents, so the majority of your own processes already have PPID 1 and safety
+# rests entirely on the target patterns above.
+#
+# With this enabled, a candidate must also show that the session it belonged to
+# is gone — its session leader (the terminal or shell that started it) no longer
+# exists. That excludes launchd/systemd-managed services and processes whose
+# session is still alive, at the cost of missing orphans that called setsid()
+# (they become their own session leader, which is indistinguishable from a
+# deliberately detached daemon).
+#
+# Run `proc-janitor scan` to see the evidence for each detected process.
+require_dead_session = false
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 

@@ -47,6 +47,15 @@ pub struct Config {
     pub targets: Vec<String>,
     #[serde(default)]
     pub whitelist: Vec<String>,
+    /// Require positive evidence that the process's session is gone before
+    /// treating it as an orphan, instead of trusting `PPID == 1` alone.
+    ///
+    /// Off by default so behaviour does not change under anyone's feet. See
+    /// `scanner::OrphanEvidence`: on macOS most user processes already have
+    /// PPID 1, so with this on the candidate set shrinks to processes whose
+    /// session leader has actually exited.
+    #[serde(default)]
+    pub require_dead_session: bool,
     #[serde(default)]
     pub logging: LoggingConfig,
 }
@@ -90,6 +99,7 @@ impl Default for Config {
                     "node.*mcp".to_string(),
                 ],
                 whitelist: vec!["node.*server".to_string(), "pm2".to_string()],
+                require_dead_session: false,
                 logging: LoggingConfig {
                     enabled: true,
                     path: log_path,
@@ -120,6 +130,7 @@ impl Config {
                 "node.*mcp".to_string(),
             ],
             whitelist: vec!["node.*server".to_string(), "pm2".to_string()],
+            require_dead_session: false,
             logging: LoggingConfig {
                 enabled: true,
                 path: log_path,
@@ -297,6 +308,18 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+        }
+
+        // Require dead-session evidence before treating PPID=1 as orphaned
+        if let Ok(val) = std::env::var("PROC_JANITOR_REQUIRE_DEAD_SESSION") {
+            match val.parse::<bool>() {
+                Ok(v) => self.require_dead_session = v,
+                Err(_) if val == "1" => self.require_dead_session = true,
+                Err(_) if val == "0" => self.require_dead_session = false,
+                Err(_) => eprintln!(
+                    "Warning: PROC_JANITOR_REQUIRE_DEAD_SESSION is not a valid boolean: {val}"
+                ),
+            }
         }
 
         // Logging configuration
@@ -776,6 +799,12 @@ pub fn show_env() -> Result<()> {
             "Whitelist patterns (comma-separated regexes)",
             "regex list",
             "node.*server,pm2",
+        ),
+        (
+            "PROC_JANITOR_REQUIRE_DEAD_SESSION",
+            "Require the session leader to be gone, not just PPID=1",
+            "true/false",
+            "false",
         ),
         (
             "PROC_JANITOR_LOG_ENABLED",

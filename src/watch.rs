@@ -35,23 +35,23 @@ pub enum Wake {
     TimedOut,
 }
 
-/// Upper bound on simultaneously watched PIDs.
-///
-/// A pathologically broad target pattern could otherwise ask for a watch on
-/// every process on the machine. Registration is cheap (measured 0.29 ms for 652
-/// PIDs) but not free, and exceeding the cap is a configuration smell worth
-/// reporting rather than absorbing silently.
-pub const MAX_WATCHES: usize = 1024;
-
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
 mod imp {
-    use super::{Wake, MAX_WATCHES};
+    use super::Wake;
     use anyhow::{Context, Result};
     use nix::errno::Errno;
     use nix::sys::event::{EventFilter, EventFlag, FilterFlag, KEvent, Kqueue};
     use std::collections::HashSet;
     use std::sync::Arc;
     use std::time::Duration;
+
+    /// Upper bound on simultaneously watched PIDs.
+    ///
+    /// A pathologically broad target pattern could otherwise ask for a watch on
+    /// every process on the machine. Registration is cheap (measured 0.29 ms for
+    /// 652 PIDs) but not free, and exceeding the cap is a configuration smell
+    /// worth reporting rather than absorbing silently.
+    const MAX_WATCHES: usize = 1024;
 
     /// Identifier of the `EVFILT_USER` event used to interrupt a blocked wait.
     const WAKE_IDENT: usize = 0;
@@ -191,7 +191,10 @@ mod imp {
                 return Wake::TimedOut;
             }
 
-            let mut outcome = Wake::TimedOut;
+            // A process exit outranks a wake: it means there is something new to
+            // scan, whereas a wake only means "re-check your flags".
+            let mut exited = false;
+            let mut woken = false;
             for event in &events[..count] {
                 if event.flags().contains(EventFlag::EV_ERROR) {
                     continue;
@@ -200,17 +203,18 @@ mod imp {
                     Ok(EventFilter::EVFILT_PROC) => {
                         // Fired registrations are consumed by EV_ONESHOT.
                         self.registered.remove(&(event.ident() as u32));
-                        outcome = Wake::ProcessExited;
+                        exited = true;
                     }
-                    Ok(EventFilter::EVFILT_USER) => {
-                        if outcome == Wake::TimedOut {
-                            outcome = Wake::Woken;
-                        }
-                    }
+                    Ok(EventFilter::EVFILT_USER) => woken = true,
                     _ => {}
                 }
             }
-            outcome
+
+            match (exited, woken) {
+                (true, _) => Wake::ProcessExited,
+                (false, true) => Wake::Woken,
+                (false, false) => Wake::TimedOut,
+            }
         }
     }
 }
@@ -289,6 +293,8 @@ pub fn waiter() -> Result<ExitWaiter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the kqueue-gated tests spawn probe processes.
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
     use std::process::Command;
     use std::time::{Duration, Instant};
 

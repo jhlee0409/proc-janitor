@@ -50,7 +50,12 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: macos-latest
+    # Both platforms: the kqueue and PR_SET_PDEATHSIG paths are cfg-gated, so a
+    # single-OS run cannot see lints (or dead code) in the other one.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

@@ -74,7 +74,7 @@ pub fn run(command: &[String], sigterm_timeout: u64) -> Result<i32> {
 
     watch.add_child(child_pid)?;
 
-    match watch.wait_for_first_exit(parent, child_pid)? {
+    match watch.wait_for_first_exit(parent, &mut child)? {
         Exited::Child => wait_for_child(&mut child),
         Exited::Parent => {
             eprintln!(
@@ -244,9 +244,13 @@ mod kqueue_watch {
         /// No timeout: a signal delivered to this process interrupts `kevent`
         /// with `EINTR`, and process exits arrive as events, so there is nothing
         /// to poll for.
-        pub(super) fn wait_for_first_exit(&self, parent: Pid, child: u32) -> Result<Exited> {
+        pub(super) fn wait_for_first_exit(
+            &self,
+            parent: Pid,
+            child: &mut std::process::Child,
+        ) -> Result<Exited> {
             let parent_ident = parent.as_raw() as usize;
-            let child_ident = child as usize;
+            let child_ident = child.id() as usize;
             let mut events = [exit_event(0); 4];
             loop {
                 let count = match self.kq.kevent(&[], &mut events, None) {
@@ -275,6 +279,7 @@ mod pdeathsig_watch {
     use super::{Exited, ParentWatch};
     use anyhow::{Context, Result};
     use nix::unistd::Pid;
+    use std::process::Child;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -297,7 +302,16 @@ mod pdeathsig_watch {
 
         /// Block until either the parent dies (delivered as SIGTERM by
         /// `PR_SET_PDEATHSIG`) or the child exits.
-        pub(super) fn wait_for_first_exit(&self, _parent: Pid, child: u32) -> Result<Exited> {
+        ///
+        /// Polls through `Child::try_wait` rather than calling `waitpid`
+        /// directly: `waitpid` reaps the child, after which the `Child::wait` the
+        /// caller does to collect the exit status fails with `ECHILD`. Letting
+        /// `Child` be the only reaper keeps the status available — it caches it.
+        pub(super) fn wait_for_first_exit(
+            &self,
+            _parent: Pid,
+            child: &mut Child,
+        ) -> Result<Exited> {
             let parent_died = Arc::new(AtomicBool::new(false));
             let flag = Arc::clone(&parent_died);
             let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGTERM])
@@ -308,16 +322,14 @@ mod pdeathsig_watch {
                 }
             });
 
-            let pid = Pid::from_raw(child as i32);
             loop {
                 if parent_died.load(Ordering::SeqCst) {
                     return Ok(Exited::Parent);
                 }
-                match nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
-                    Ok(nix::sys::wait::WaitStatus::StillAlive) => {
-                        std::thread::sleep(super::TERMINATE_POLL_INTERVAL);
-                    }
-                    _ => return Ok(Exited::Child),
+                match child.try_wait() {
+                    Ok(Some(_)) => return Ok(Exited::Child),
+                    Ok(None) => std::thread::sleep(super::TERMINATE_POLL_INTERVAL),
+                    Err(e) => return Err(e).context("Failed to poll the command"),
                 }
             }
         }

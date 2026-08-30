@@ -102,7 +102,9 @@ reproduced by a test or measured on macOS 25.6 (~960 processes), not inferred.
   retention policy, so they grow without bound; the check warns past 10 MiB and
   prints the truncation command that keeps the supervisor's open fd valid.
 - CI job verifying the declared MSRV (1.82) on macOS and Linux. It was previously
-  an unchecked claim — only stable was built.
+  an unchecked claim — only stable was built. Clippy now runs on both platforms
+  too: the kqueue and `PR_SET_PDEATHSIG` paths are `cfg`-gated, so a single-OS
+  lint job structurally cannot see dead code or lints in the other one.
 
 ### Changed
 - **The daemon uses less than half the CPU per scan.** It built a whole new

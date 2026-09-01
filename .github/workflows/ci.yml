@@ -81,8 +81,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # This tool kills processes on the user's machine, so a known-vulnerable
-      # dependency reaching a release is worth failing the build over.
-      - uses: rustsec/audit-check@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      # Run the tool directly rather than through rustsec/audit-check: that
+      # action creates a GitHub check-run, which needs `checks: write` on the
+      # token and fails with "Resource not accessible by integration" without it.
+      # The findings are just as visible in the job log, with no extra permission.
+      #
+      # This tool kills processes on the user's machine, so a known-vulnerable
+      # dependency reaching a release is worth failing the build over. Plain
+      # `cargo audit` fails on vulnerabilities only; `unmaintained`/`unsound`
+      # warnings are reported without failing, which is the right default here —
+      # `daemonize` is unmaintained and there is no drop-in replacement yet.
+      - run: cargo audit

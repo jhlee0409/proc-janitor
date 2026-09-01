@@ -98,11 +98,11 @@ fn run() -> Result<Option<i32>> {
                         println!(
                             "  PID {} - {} ({}  {}  {})\n    Command: {}",
                             orphan.pid,
-                            orphan.name,
+                            crate::util::sanitize_for_display(&orphan.name),
                             mem,
                             uptime,
                             orphan.evidence.label(),
-                            orphan.cmdline
+                            crate::util::sanitize_for_display(&orphan.cmdline)
                         );
                     }
                     if use_color() {
@@ -186,7 +186,11 @@ fn run() -> Result<Option<i32>> {
                         result.total
                     );
                     for res in &result.results {
-                        println!("  PID {} - {}", res.pid, res.name);
+                        println!(
+                            "  PID {} - {}",
+                            res.pid,
+                            crate::util::sanitize_for_display(&res.name)
+                        );
                     }
                     println!("\nRun 'proc-janitor clean' (without --dry-run) to kill them.");
                 }

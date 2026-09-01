@@ -205,7 +205,12 @@ pub fn clean_filtered(
     if !dry_run && !assume_yes && !to_clean.is_empty() && std::io::stdin().is_terminal() {
         eprintln!("About to kill {} orphaned process(es):", to_clean.len());
         for o in &to_clean {
-            eprintln!("  PID {} - {} ({})", o.pid, o.name, o.cmdline);
+            eprintln!(
+                "  PID {} - {} ({})",
+                o.pid,
+                crate::util::sanitize_for_display(&o.name),
+                crate::util::sanitize_for_display(&o.cmdline)
+            );
         }
         eprint!("Proceed? [y/N] ");
         let mut input = String::new();

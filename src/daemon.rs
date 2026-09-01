@@ -197,7 +197,9 @@ impl Daemon {
                         for orphan in &result.orphans {
                             eprintln!(
                                 "[DRY-RUN]   PID {} - {} ({})",
-                                orphan.pid, orphan.name, orphan.cmdline
+                                orphan.pid,
+                                crate::util::sanitize_for_display(&orphan.name),
+                                crate::util::sanitize_for_display(&orphan.cmdline)
                             );
                         }
                     } else {

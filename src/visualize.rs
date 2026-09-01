@@ -88,11 +88,16 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
             ProcessNode {
                 pid: pid_u32,
                 ppid,
-                name,
+                // Display-only fields: `is_target`/`is_whitelisted` above were
+                // computed from the raw command line, so sanitising here cannot
+                // change what the tree classifies.
+                name: crate::util::sanitize_for_display(&name).into_owned(),
                 cmdline: if cmdline.chars().count() > 80 {
-                    format!("{}...", cmdline.chars().take(77).collect::<String>())
+                    crate::util::sanitize_for_display(&cmdline.chars().take(77).collect::<String>())
+                        .into_owned()
+                        + "..."
                 } else {
-                    cmdline
+                    crate::util::sanitize_for_display(&cmdline).into_owned()
                 },
                 memory_mb: process.memory() as f64 / 1024.0 / 1024.0,
                 is_target,

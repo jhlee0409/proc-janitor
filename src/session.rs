@@ -499,7 +499,8 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
         println!("Found {} process(es) to clean:", pids_to_clean.len());
         for pid in &pids_to_clean {
             if let Some(process) = sys.process(sysinfo::Pid::from_u32(*pid)) {
-                let name = process.name().to_string_lossy();
+                let name = crate::util::sanitize_for_display(&process.name().to_string_lossy())
+                    .into_owned();
                 println!("  PID {pid} - {name}");
             }
         }

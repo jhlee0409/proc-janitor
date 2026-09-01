@@ -37,7 +37,7 @@ Rust daemon + CLI that polls the process table to detect and kill orphaned proce
 ### Testing Requirements
 ```bash
 cargo build          # Must pass first
-cargo test           # 115 tests (81 unit + 34 integration)
+cargo test           # 117 tests (83 unit + 34 integration)
 cargo check --target x86_64-unknown-linux-gnu --all-targets   # cfg-gated Linux path
 cargo clippy --all-targets   # Must be warning-free, tests included. Run on an up-to-date `stable`: CI uses
                      # dtolnay/rust-toolchain@stable, so an older local toolchain
@@ -54,6 +54,10 @@ cargo audit          # CI fails on advisories; keep the lockfile current
 - Target/whitelist matching: one function, `scanner::matches_any`; `visualize` must use it so
   `tree` cannot disagree with `scan`
 - Color output: `crate::util::use_color()` + `owo-colors` (conditional)
+- Any process-supplied text (name, cmdline) printed for humans MUST go through
+  `util::sanitize_for_display`; a process controls its own argv and can otherwise inject terminal
+  escapes and forge report lines. JSON output must NOT use it — serde escapes, and the value must
+  stay the real command line
 - Symlink protection: `util::check_not_symlink()` before writing predictable paths
 - Config validation: boundary checks on all numeric values, pinned by the table in `test_validate_boundaries`
 - Regex compilation: always `scanner::compile_pattern`, never `Regex::new`. Pattern count and length are

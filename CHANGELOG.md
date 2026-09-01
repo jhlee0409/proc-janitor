@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `start` now refuses, naming the cause, the consequence and the fix. `scan` and
   `clean` already propagated the error correctly.
 
+- **Process command lines can no longer inject terminal escapes or forge report
+  lines.** A process controls its own `argv`, and `scan`/`clean` printed it
+  verbatim. Verified with a probe whose command line carried `\x1b[2J` (clear
+  screen), `\x1b[1;1H` (move cursor), `\x1b]0;…\x07` (rewrite the window title)
+  and a newline: `scan` emitted all three escape bytes and an extra output line
+  reading `FAKE INFO proc_janitor::cleaner: terminated orphaned process pid=1` —
+  a fabricated entry indistinguishable from a real one.
+
+  Human-readable output now goes through `util::sanitize_for_display`, which
+  renders control characters as visible `\xNN` so nothing is dropped and nothing
+  executes. `ps` sanitises for exactly this reason. JSON output deliberately does
+  not: `serde_json` escapes control characters already, and the emitted value has
+  to remain the real command line.
+
 - **Pattern compilation is bounded.** The config limits how many patterns there
   are (100) and how long each is (1024 chars), but nothing bounded what a pattern
   costs to *compile*. Measured: 100 copies of a 39-character pattern

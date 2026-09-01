@@ -6,6 +6,39 @@ pub fn use_color() -> bool {
         && supports_color::on(supports_color::Stream::Stdout).is_some()
 }
 
+/// Render text that came from another process's `argv` safely for a terminal.
+///
+/// A process controls its own command line, including control bytes, and
+/// `scan`/`clean` print those command lines. Unsanitised, any local process can
+/// put `\x1b[2J` (clear screen), `\x1b[1;1H` (move cursor) or `\x1b]0;…\x07`
+/// (rewrite the window title) into the output of a tool the user runs — and a
+/// newline lets it forge an entire extra report line, e.g. a plausible-looking
+/// "terminated orphaned process" entry that never happened.
+///
+/// `ps` sanitises for exactly this reason; a tool whose whole job is displaying
+/// other processes' argv should too. Control characters become a visible `\xNN`
+/// so the text stays readable and nothing is silently dropped.
+///
+/// JSON output does not need this — `serde_json` escapes control characters — and
+/// must not use it, or the emitted value would no longer be the real command
+/// line.
+pub fn sanitize_for_display(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.chars().any(|c| c.is_control()) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() {
+            // `is_control` covers C0, DEL and C1; all fit in two hex digits
+            // except the C1 range, which `{:02x}` widens automatically.
+            out.push_str(&format!("\\x{:02x}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// The set of process fields proc-janitor actually reads.
 ///
 /// `pid`, `parent`, `name` and `start_time` are always retrieved by any refresh;
@@ -169,6 +202,42 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// A process controls its own `argv`, and `scan`/`clean` print it. These are
+    /// the sequences that matter: screen/cursor control, a window-title rewrite,
+    /// and a newline that would forge an extra report line.
+    #[test]
+    fn test_sanitize_neutralises_terminal_control_sequences() {
+        let hostile =
+            "PJPROBE\x1b[2J\x1b[1;1H\x1b]0;HIJACKED\x07\nFAKE terminated orphaned process";
+        let safe = sanitize_for_display(hostile);
+
+        assert!(!safe.contains('\x1b'), "ESC survived: {safe}");
+        assert!(!safe.contains('\n'), "newline survived: {safe}");
+        assert!(!safe.contains('\x07'), "BEL survived: {safe}");
+        // Nothing is dropped — the operator can still see what was attempted.
+        assert!(safe.contains("PJPROBE"), "payload text lost: {safe}");
+        assert!(safe.contains("\\x1b"), "escape not shown: {safe}");
+        assert!(safe.contains("\\x0a"), "newline not shown: {safe}");
+    }
+
+    /// Ordinary command lines must pass through untouched, and without
+    /// allocating.
+    #[test]
+    fn test_sanitize_leaves_normal_text_alone() {
+        for text in [
+            "node /usr/local/bin/claude --flag",
+            "python3 -m http.server 8000",
+            "sh -c 'sleep 30; : marker'",
+            "프로세스 이름 with unicode ✓",
+        ] {
+            let out = sanitize_for_display(text);
+            assert_eq!(out, text);
+            assert!(
+                matches!(out, std::borrow::Cow::Borrowed(_)),
+                "should not allocate for clean text: {text}"
+            );
+        }
+    }
     #[test]
     fn test_check_not_symlink_regular_file() {
         let dir = TempDir::new().unwrap();

@@ -710,12 +710,20 @@ fn test_exec_is_transparent_while_parent_lives() {
         .output()
         .expect("Failed to run exec");
 
+    // Include stderr: exit code 1 means `exec` itself errored, and without the
+    // message there is nothing to go on — which is exactly what happened when
+    // this failed on a CI runner but not locally.
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         output.status.code(),
         Some(7),
-        "exec must propagate the command's exit code"
+        "exec must propagate the command's exit code; stderr was: {stderr}"
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "hello",
+        "stderr was: {stderr}"
+    );
 }
 
 #[test]

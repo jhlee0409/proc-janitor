@@ -102,14 +102,50 @@ fn check_targets_configured() -> bool {
                 );
                 false
             } else {
-                pass(
-                    "Target patterns",
-                    &format!(
-                        "{} pattern{} configured",
-                        config.targets.len(),
-                        if config.targets.len() == 1 { "" } else { "s" }
-                    ),
+                // How many live processes each pattern matches. Deliberately
+                // informational, never a failure: "matches nothing" is exactly
+                // what a correct config looks like when the target program simply
+                // is not running right now, so it cannot be told apart from a
+                // typo. Showing the counts lets the user make that call.
+                let sys = crate::util::process_snapshot();
+                let cmdlines: Vec<String> = sys
+                    .processes()
+                    .values()
+                    .map(|p| {
+                        p.cmd()
+                            .iter()
+                            .map(|s| s.to_string_lossy())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .collect();
+                let unmatched: Vec<&String> = config
+                    .targets
+                    .iter()
+                    .filter(|pattern| match regex::Regex::new(pattern) {
+                        Ok(re) => !cmdlines.iter().any(|c| re.is_match(c)),
+                        Err(_) => false, // reported by the validation check
+                    })
+                    .collect();
+
+                let detail = format!(
+                    "{} pattern{} configured{}",
+                    config.targets.len(),
+                    if config.targets.len() == 1 { "" } else { "s" },
+                    if unmatched.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "; matching no running process right now: {}",
+                            unmatched
+                                .iter()
+                                .map(|p| format!("'{p}'"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
                 );
+                pass("Target patterns", &detail);
                 true
             }
         }
@@ -118,6 +154,236 @@ fn check_targets_configured() -> bool {
             false
         }
     }
+}
+
+/// Would the daemon's own command line match a target pattern?
+///
+/// The daemon refuses to signal itself (since 0.8.3), so this cannot make it
+/// suicide — but a pattern broad enough to match `proc-janitor` will also match
+/// *another* proc-janitor process, and is almost always a sign of a pattern like
+/// `.*` that will take unrelated processes with it.
+fn check_self_matching_patterns() -> bool {
+    let Ok(config) = config::Config::load() else {
+        fail("Self-match guard", "Cannot load config", None);
+        return false;
+    };
+    if config.targets.is_empty() {
+        pass("Self-match guard", "No target patterns to check");
+        return true;
+    }
+
+    // The command line the daemon actually runs under, which is what the scanner
+    // would test — not `doctor`'s own argv.
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "proc-janitor".to_string());
+    let daemon_cmdline = format!("{exe} start --foreground");
+
+    let compile = |patterns: &[String]| -> Vec<regex::Regex> {
+        patterns
+            .iter()
+            .filter_map(|p| regex::Regex::new(p).ok())
+            .collect()
+    };
+    let whitelist = compile(&config.whitelist);
+    if crate::scanner::matches_any(&whitelist, &daemon_cmdline) {
+        pass("Self-match guard", "proc-janitor is whitelisted");
+        return true;
+    }
+
+    let offenders: Vec<&String> = config
+        .targets
+        .iter()
+        .filter(|p| {
+            regex::Regex::new(p)
+                .map(|re| re.is_match(&daemon_cmdline))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if offenders.is_empty() {
+        pass("Self-match guard", "No pattern matches proc-janitor itself");
+        return true;
+    }
+
+    fail(
+        "Self-match guard",
+        &format!(
+            "these patterns match proc-janitor's own command line: {}",
+            offenders
+                .iter()
+                .map(|p| format!("'{p}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Some("Narrow the pattern, or add 'proc-janitor' to the whitelist"),
+    );
+    false
+}
+
+/// The program path recorded in the installed service definition, if any.
+///
+/// Returns `(description, path)`. Parsing is intentionally minimal: the goal is
+/// to read back the one path the installer wrote, not to implement plist or unit
+/// file parsers.
+fn supervisor_program() -> Option<(String, std::path::PathBuf)> {
+    let home = dirs::home_dir()?;
+
+    let plist = home
+        .join("Library")
+        .join("LaunchAgents")
+        .join("com.proc-janitor.plist");
+    if let Ok(text) = fs::read_to_string(&plist) {
+        // First <string> naming an absolute path to the binary.
+        let path = text
+            .split("<string>")
+            .skip(1)
+            .filter_map(|chunk| chunk.split("</string>").next())
+            .find(|value| value.starts_with('/') && value.contains("proc-janitor"));
+        if let Some(path) = path {
+            return Some(("LaunchAgent".to_string(), std::path::PathBuf::from(path)));
+        }
+    }
+
+    let unit = home
+        .join(".config")
+        .join("systemd")
+        .join("user")
+        .join("proc-janitor.service");
+    if let Ok(text) = fs::read_to_string(&unit) {
+        let path = text
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("ExecStart="))
+            .and_then(|value| value.split_whitespace().next());
+        if let Some(path) = path {
+            return Some(("systemd unit".to_string(), std::path::PathBuf::from(path)));
+        }
+    }
+
+    None
+}
+
+/// Does the installed service still point at a binary that exists?
+///
+/// This is the "the install is silently broken" case: the unit or plist keeps the
+/// absolute path it was written with, so moving or reinstalling the binary
+/// elsewhere leaves the supervisor launching something that is no longer there —
+/// launchd retries forever, systemd fails with 203/EXEC, and nothing cleans up.
+fn check_supervisor_binary() -> bool {
+    let Some((kind, path)) = supervisor_program() else {
+        pass(
+            "Service definition",
+            "None installed (run manually or via brew)",
+        );
+        return true;
+    };
+
+    if !path.exists() {
+        fail(
+            "Service definition",
+            &format!("{kind} points at {}, which does not exist", path.display()),
+            Some("Reinstall the service so it points at the current binary"),
+        );
+        return false;
+    }
+
+    // Existing but different from the binary on PATH is legitimate (both may be
+    // installed), so report it without failing.
+    let on_path = which_proc_janitor();
+    let detail = match &on_path {
+        Some(p) if *p != path => format!(
+            "{kind} runs {} (PATH resolves proc-janitor to {})",
+            path.display(),
+            p.display()
+        ),
+        _ => format!("{kind} runs {}", path.display()),
+    };
+    pass("Service definition", &detail);
+    true
+}
+
+/// First `proc-janitor` on `PATH`.
+fn which_proc_janitor() -> Option<std::path::PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join("proc-janitor"))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Are `PROC_JANITOR_*` overrides set here but invisible to the daemon?
+///
+/// Environment overrides set in a shell profile apply to the CLI but not to a
+/// launchd or systemd service, which does not inherit the shell's environment.
+/// The result is `config env` showing one configuration and the daemon running
+/// with another — a difference that is otherwise very hard to notice.
+fn check_env_reaches_daemon() -> bool {
+    let set_here: Vec<String> = std::env::vars()
+        .map(|(k, _)| k)
+        .filter(|k| k.starts_with("PROC_JANITOR_"))
+        .collect();
+
+    if set_here.is_empty() {
+        pass("Env overrides", "None set");
+        return true;
+    }
+
+    let Some((kind, _)) = supervisor_program() else {
+        pass(
+            "Env overrides",
+            &format!(
+                "{} set; no service installed to diverge from",
+                set_here.len()
+            ),
+        );
+        return true;
+    };
+
+    // Read the service definition and see whether it carries them too.
+    let home = dirs::home_dir();
+    let definition = home
+        .map(|h| {
+            [
+                h.join("Library")
+                    .join("LaunchAgents")
+                    .join("com.proc-janitor.plist"),
+                h.join(".config")
+                    .join("systemd")
+                    .join("user")
+                    .join("proc-janitor.service"),
+            ]
+        })
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|p| fs::read_to_string(p).ok())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+
+    let missing: Vec<&String> = set_here
+        .iter()
+        .filter(|key| !definition.contains(key.as_str()))
+        .collect();
+
+    if missing.is_empty() {
+        pass("Env overrides", &format!("{kind} carries all of them"));
+        return true;
+    }
+
+    fail(
+        "Env overrides",
+        &format!(
+            "set in this shell but absent from the {kind}, so the daemon does not see them: {}",
+            missing
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Some("Put them in the service definition, or in the config file instead"),
+    );
+    false
 }
 
 fn check_data_directory() -> bool {
@@ -412,7 +678,7 @@ pub fn run() -> Result<()> {
     println!();
 
     let mut passed = 0;
-    let total = 9;
+    let total = 12;
 
     if check_config_file() {
         passed += 1;
@@ -421,6 +687,15 @@ pub fn run() -> Result<()> {
         passed += 1;
     }
     if check_targets_configured() {
+        passed += 1;
+    }
+    if check_self_matching_patterns() {
+        passed += 1;
+    }
+    if check_supervisor_binary() {
+        passed += 1;
+    }
+    if check_env_reaches_daemon() {
         passed += 1;
     }
     if check_data_directory() {

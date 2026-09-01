@@ -35,12 +35,13 @@ Rust daemon + CLI that polls the process table to detect and kill orphaned proce
 ### Testing Requirements
 ```bash
 cargo build          # Must pass first
-cargo test           # 122 tests (90 unit + 32 integration)
+cargo test           # 111 tests (79 unit + 32 integration)
 cargo check --target x86_64-unknown-linux-gnu --all-targets   # cfg-gated Linux path
-cargo clippy         # Must be warning-free. Run on an up-to-date `stable`: CI uses
+cargo clippy --all-targets   # Must be warning-free, tests included. Run on an up-to-date `stable`: CI uses
                      # dtolnay/rust-toolchain@stable, so an older local toolchain
                      # silently misses lints (e.g. collapsible_match landed in 1.98)
 cargo fmt --check    # CI enforces formatting
+cargo audit          # CI fails on advisories; keep the lockfile current
 ```
 
 ### Common Patterns
@@ -52,7 +53,9 @@ cargo fmt --check    # CI enforces formatting
   `tree` cannot disagree with `scan`
 - Color output: `crate::util::use_color()` + `owo-colors` (conditional)
 - Symlink protection: `util::check_not_symlink()` before writing predictable paths
-- Config validation: boundary checks on all numeric values
+- Config validation: boundary checks on all numeric values, pinned by the table in `test_validate_boundaries`
+- Config path: always `config::config_path()`, which honours `$PROC_JANITOR_CONFIG`; never rebuild the path inline
+- MSRV is a tested claim, not a preference: never lower it by pinning a dependency back without checking `cargo audit` first
 
 ### Key Design Decisions
 - `scan` = detection only (never kills), `clean` = execution (always kills, with optional filters)

@@ -353,14 +353,20 @@ impl Scanner {
             });
         }
 
-        // Phase 3b: the grace period runs from the first sighting, so an existing
-        // entry always wins over the fresh snapshot.
+        // Phase 3b: apply the grace period. Only `first_seen` is history — it is
+        // the anchor the grace period is measured from, so it must survive. Every
+        // other field is carried over from the fresh snapshot, otherwise a
+        // long-lived orphan keeps reporting the memory, uptime and command line
+        // it had when the daemon first noticed it, which can be hours stale.
         let mut due = Vec::new();
-        for candidate in cleanable {
-            let tracked = self.tracked.entry(candidate.pid).or_insert(candidate);
-            if now.duration_since(tracked.first_seen).as_secs() >= self.config.grace_period {
-                due.push(tracked.clone());
+        for mut candidate in cleanable {
+            if let Some(existing) = self.tracked.get(&candidate.pid) {
+                candidate.first_seen = existing.first_seen;
             }
+            if now.duration_since(candidate.first_seen).as_secs() >= self.config.grace_period {
+                due.push(candidate.clone());
+            }
+            self.tracked.insert(candidate.pid, candidate);
         }
 
         // Remove processes that are no longer running

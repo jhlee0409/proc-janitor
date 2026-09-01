@@ -2,12 +2,14 @@
 name = "proc-janitor"
 version = "0.9.1"
 edition = "2021"
-# Verified in CI (the `msrv` job) against the committed Cargo.lock. If bumping a
-# dependency makes that job fail, either pin the dependency back in Cargo.lock or
-# raise this — do not leave it as an untested claim. Currently `time` is held at
-# 0.3.41 in the lockfile for exactly this reason: 0.3.46 pulls time-core 0.1.8,
-# which requires rustc 1.88.
-rust-version = "1.82"
+# Verified in CI (the `msrv` job) against the committed Cargo.lock.
+#
+# This was 1.82, held there by pinning `time` back to 0.3.41. `cargo audit` then
+# showed that pin was holding a crate with a published advisory
+# (RUSTSEC-2026-0009, DoS via stack exhaustion, fixed in 0.3.47) — a bad trade for
+# a lower floor, since most users install a prebuilt binary or via Homebrew where
+# the MSRV never applies. `time` is current again and this follows it honestly.
+rust-version = "1.88"
 authors = ["Jack <jhlee0409@users.noreply.github.com>"]
 description = "Automatic orphan process cleaner daemon for macOS/Linux"
 license = "MIT"

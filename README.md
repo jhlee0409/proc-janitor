@@ -296,7 +296,7 @@ proc-janitor -j scan
 
 ## Configuration
 
-Config file: `~/.config/proc-janitor/config.toml` (all platforms)
+Config file: `~/.config/proc-janitor/config.toml` (all platforms), or `$PROC_JANITOR_CONFIG` if set — useful for a second profile.
 
 ```toml
 # How often to scan (seconds, 1–3600)
@@ -345,6 +345,7 @@ Every config option can be overridden via environment variables. Values outside 
 | `PROC_JANITOR_TARGETS` | comma-separated regexes | `"python.*test,node.*dev"` |
 | `PROC_JANITOR_WHITELIST` | comma-separated regexes | `"safe1,safe2"` |
 | `PROC_JANITOR_REQUIRE_DEAD_SESSION` | `true` / `false` | `true` |
+| `PROC_JANITOR_CONFIG` | path to a config file | `"/etc/pj/work.toml"` |
 | `PROC_JANITOR_LOG_ENABLED` | `true` / `false` | `false` |
 | `PROC_JANITOR_LOG_PATH` | path under `$HOME` | `"/Users/you/.proc-janitor/logs"` |
 | `PROC_JANITOR_LOG_RETENTION_DAYS` | 0–365 | `14` |
@@ -469,7 +470,7 @@ proc-janitor/
 │   ├── scanner.rs     # Orphan process detection
 │   ├── cleaner.rs     # Process termination (SIGTERM/SIGKILL)
 │   ├── kill.rs        # Shared kill logic (system PID guard, PID reuse check, polling)
-│   ├── doctor.rs      # Health checks and diagnostics (9 checks)
+│   ├── doctor.rs      # Health checks and diagnostics (12 checks)
 │   ├── config.rs      # TOML config + env var overrides + presets
 │   ├── config_template.toml  # Commented config template (embedded at compile time)
 │   ├── logger.rs      # Structured logging with rotation

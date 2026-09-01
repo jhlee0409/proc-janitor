@@ -390,8 +390,23 @@ impl Config {
     }
 }
 
-/// Get the configuration file path (~/.config/proc-janitor/config.toml on all platforms)
+/// Get the configuration file path.
+///
+/// `$PROC_JANITOR_CONFIG` overrides it; otherwise
+/// `~/.config/proc-janitor/config.toml` on all platforms. The override is what
+/// makes a second profile — or an isolated test run — possible without rewriting
+/// `$HOME`.
+///
+/// The value is used as given. Unlike `PROC_JANITOR_LOG_PATH`, which the daemon
+/// writes to unattended and therefore validates, this names a file the invoking
+/// user explicitly chose to point at, so there is no privilege boundary to
+/// defend. Writes still go through `util::open_nofollow_write`, so a symlink
+/// planted at the path is refused either way.
 pub fn config_path() -> Result<PathBuf> {
+    match std::env::var_os("PROC_JANITOR_CONFIG") {
+        Some(path) if !path.is_empty() => return Ok(PathBuf::from(path)),
+        _ => {}
+    }
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
     Ok(home
         .join(".config")
@@ -1048,88 +1063,170 @@ mod tests {
         std::env::remove_var("PROC_JANITOR_WHITELIST");
     }
 
+    /// Boundary matrix for [`Config::validate`].
+    ///
+    /// Table-driven so the accepted ranges are stated once instead of being
+    /// spread across a dozen near-identical tests — and so the struct is built
+    /// with update syntax rather than mutated after `Default::default()`, which
+    /// clippy rightly flags.
     #[test]
-    fn test_validate_scan_interval_zero() {
-        let mut config = Config::default();
-        config.scan_interval = 0;
-        assert!(config.validate().is_err());
-    }
+    fn test_validate_boundaries() {
+        let base = Config::default();
+        let long_pattern = |n: usize| vec!["a".repeat(n)];
+        let many = |n: usize| (0..n).map(|i| format!("pattern{i}")).collect::<Vec<_>>();
 
-    #[test]
-    fn test_validate_scan_interval_max() {
-        let mut config = Config::default();
-        config.scan_interval = 3600;
-        assert!(config.validate().is_ok());
-    }
+        let cases: Vec<(&str, Config, bool)> = vec![
+            // scan_interval: 1..=3600
+            (
+                "scan_interval = 0",
+                Config {
+                    scan_interval: 0,
+                    ..base.clone()
+                },
+                false,
+            ),
+            (
+                "scan_interval = 1",
+                Config {
+                    scan_interval: 1,
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "scan_interval = 3600",
+                Config {
+                    scan_interval: 3600,
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "scan_interval = 3601",
+                Config {
+                    scan_interval: 3601,
+                    ..base.clone()
+                },
+                false,
+            ),
+            // grace_period: 0..=3600 (0 is legal — kill on first sighting)
+            (
+                "grace_period = 0",
+                Config {
+                    grace_period: 0,
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "grace_period = 3600",
+                Config {
+                    grace_period: 3600,
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "grace_period = 3601",
+                Config {
+                    grace_period: 3601,
+                    ..base.clone()
+                },
+                false,
+            ),
+            // sigterm_timeout: 1..=60
+            (
+                "sigterm_timeout = 0",
+                Config {
+                    sigterm_timeout: 0,
+                    ..base.clone()
+                },
+                false,
+            ),
+            (
+                "sigterm_timeout = 1",
+                Config {
+                    sigterm_timeout: 1,
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "sigterm_timeout = 60",
+                Config {
+                    sigterm_timeout: 60,
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "sigterm_timeout = 61",
+                Config {
+                    sigterm_timeout: 61,
+                    ..base.clone()
+                },
+                false,
+            ),
+            // pattern counts: at most 100 per list
+            (
+                "100 targets",
+                Config {
+                    targets: many(100),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "101 targets",
+                Config {
+                    targets: many(101),
+                    ..base.clone()
+                },
+                false,
+            ),
+            (
+                "100 whitelist",
+                Config {
+                    whitelist: many(100),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "101 whitelist",
+                Config {
+                    whitelist: many(101),
+                    ..base.clone()
+                },
+                false,
+            ),
+            // pattern length: at most 1024 chars
+            (
+                "pattern of 1024 chars",
+                Config {
+                    targets: long_pattern(1024),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "pattern of 1025 chars",
+                Config {
+                    targets: long_pattern(1025),
+                    ..base.clone()
+                },
+                false,
+            ),
+        ];
 
-    #[test]
-    fn test_validate_scan_interval_over_max() {
-        let mut config = Config::default();
-        config.scan_interval = 3601;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_grace_period_zero() {
-        let mut config = Config::default();
-        config.grace_period = 0;
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_grace_period_over_max() {
-        let mut config = Config::default();
-        config.grace_period = 3601;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_sigterm_timeout_zero() {
-        let mut config = Config::default();
-        config.sigterm_timeout = 0;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_sigterm_timeout_max() {
-        let mut config = Config::default();
-        config.sigterm_timeout = 60;
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_sigterm_timeout_over_max() {
-        let mut config = Config::default();
-        config.sigterm_timeout = 61;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_too_many_targets() {
-        let mut config = Config::default();
-        config.targets = (0..101).map(|i| format!("pattern{i}")).collect();
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_max_targets_ok() {
-        let mut config = Config::default();
-        config.targets = (0..100).map(|i| format!("pattern{i}")).collect();
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_pattern_too_long() {
-        let mut config = Config::default();
-        config.targets = vec!["a".repeat(1025)];
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_pattern_at_max_length() {
-        let mut config = Config::default();
-        config.targets = vec!["a".repeat(1024)];
-        assert!(config.validate().is_ok());
+        for (what, config, expected_ok) in cases {
+            assert_eq!(
+                config.validate().is_ok(),
+                expected_ok,
+                "{what}: expected validate() to be {}",
+                if expected_ok { "Ok" } else { "Err" }
+            );
+        }
     }
 
     #[test]

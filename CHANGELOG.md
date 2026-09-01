@@ -7,7 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **A dependency pin was holding back a crate with a published advisory.** The
+  1.82 MSRV was kept by pinning `time` to 0.3.41 in the lockfile; `cargo audit`
+  showed 0.3.41 is affected by RUSTSEC-2026-0009 (denial of service via stack
+  exhaustion, severity 6.8, fixed in 0.3.47). Trading that for a lower MSRV is
+  the wrong way round — most users install a prebuilt binary or via Homebrew,
+  where the MSRV never applies. `time` is current again (0.3.55), and
+  `crossbeam-epoch` (RUSTSEC-2026-0204, invalid pointer dereference, via
+  `sysinfo` → `rayon`) and `anyhow` were updated with it. `cargo audit` now
+  reports no vulnerabilities.
+
+  **MSRV is therefore now 1.88**, up from 1.82, which is what the current
+  dependency set actually requires. It is verified in CI as before.
+
+### Added
+- CI runs `cargo audit`. This tool kills processes on the user's machine; a
+  known-vulnerable dependency reaching a release is worth failing the build over.
+  It is also what found the pin above.
+- Three `doctor` checks for the "the install is silently broken" class of
+  problem, each of which was previously invisible:
+  - **Service definition** — the plist or systemd unit keeps the absolute path it
+    was written with, so moving or reinstalling the binary elsewhere leaves the
+    supervisor launching something that no longer exists (launchd retries forever,
+    systemd fails 203/EXEC) and nothing gets cleaned up. Fails when the recorded
+    path is missing; when it merely differs from the `proc-janitor` on `PATH`,
+    that is reported without failing, since having both installed is legitimate.
+  - **Self-match guard** — a target pattern that matches proc-janitor's own
+    command line. The daemon refuses to signal itself, so this cannot cause
+    suicide, but such a pattern will match *another* proc-janitor process and is
+    almost always a `.*`-shaped mistake that takes unrelated processes with it.
+  - **Env overrides** — `PROC_JANITOR_*` set in a shell profile applies to the
+    CLI but not to a launchd or systemd service, which does not inherit the
+    shell's environment. The result is `config env` showing one configuration
+    while the daemon runs with another.
+- `$PROC_JANITOR_CONFIG` overrides the config file path. Every caller already
+  went through `config_path()`, so this works for the daemon, the CLI and
+  `doctor` alike. It makes a second profile — or an isolated test run — possible
+  without rewriting `$HOME`. Unlike `PROC_JANITOR_LOG_PATH` it is used as given:
+  it names a file the invoking user explicitly chose, so there is no privilege
+  boundary to defend, and writes still go through `open_nofollow_write`.
+
+### Fixed
+- `scan` details no longer freeze at first sighting. The daemon's tracking map
+  kept the whole `OrphanProcess` from the moment a process was first seen, so
+  memory, uptime and command line could be hours stale. Only `first_seen` is
+  history now — it is the anchor the grace period is measured from — and every
+  other field comes from the current snapshot. Latent rather than user-visible
+  today, since nothing reports those fields from the daemon, but it made the
+  struct lie about what it described.
+
 ### Changed
+- CI lints tests too (`clippy --all-targets`). Without it, test code drifts out
+  of lint compliance unnoticed; there were twelve such warnings.
+- The dozen near-identical `validate()` boundary tests are now one table, so the
+  accepted ranges are stated once instead of spread across twelve functions. The
+  table also covers cases the individual tests missed (`scan_interval = 1`,
+  `grace_period = 3600`, `sigterm_timeout = 1`, and the whitelist count limit).
 - **`session clean` now does something when nothing was tracked.** A session
   registered without explicit `session track` calls had `pids: []`, so
   `session clean` found nothing and killed nothing. The shell integration was

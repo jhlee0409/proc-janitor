@@ -24,6 +24,12 @@ Rust daemon + CLI that polls the process table to detect and kill orphaned proce
 | `integrations/` | Shell/editor integration helpers (see `integrations/AGENTS.md`) |
 | `.github/` | CI workflows and issue templates (see `.github/AGENTS.md`) |
 
+> Homebrew: the formula is NOT pushed from `release.yml`. The tap
+> (`jhlee0409/homebrew-tap`) pulls this repo's latest release from its own
+> `update-formula.yml`, so no cross-repo secret is involved. Do not reintroduce a
+> push-based job — the token it needs expired once and failed five releases in a
+> row unnoticed.
+
 ## For AI Agents
 
 ### Working In This Directory

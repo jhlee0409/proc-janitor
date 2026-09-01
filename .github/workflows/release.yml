@@ -127,85 +127,34 @@ jobs:
           files: dist/*
           generate_release_notes: false
 
-  update-homebrew:
-    name: Update Homebrew Formula
+  # The Homebrew formula is no longer pushed from here.
+  #
+  # This job used to clone jhlee0409/homebrew-tap and commit the updated formula,
+  # which needs a cross-repo token (HOMEBREW_TAP_TOKEN). That token expired and
+  # the job failed on every release from v0.8.3 through v0.10.1 — five in a row —
+  # with "Invalid username or token". Because the build and release jobs stayed
+  # green, the failure was easy to miss, and the formula was updated by hand each
+  # time.
+  #
+  # The tap now pulls instead: .github/workflows/update-formula.yml there reads
+  # this repo's latest release and commits with its own GITHUB_TOKEN, so there is
+  # no secret to expire and a missed run is picked up by the next scheduled one.
+  # It runs daily; to publish immediately after a release:
+  #
+  #   gh workflow run update-formula.yml -R jhlee0409/homebrew-tap
+  homebrew-reminder:
+    name: Homebrew
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Calculate checksums and update formula
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: How the formula gets updated
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          version="${tag#v}"
-
-          # Extract SHA256 from .sha256 files
-          sha_aarch64_darwin=$(awk '{print $1}' dist/proc-janitor-${tag}-aarch64-apple-darwin.tar.gz.sha256)
-          sha_x86_64_darwin=$(awk '{print $1}' dist/proc-janitor-${tag}-x86_64-apple-darwin.tar.gz.sha256)
-          sha_aarch64_linux=$(awk '{print $1}' dist/proc-janitor-${tag}-aarch64-unknown-linux-gnu.tar.gz.sha256)
-          sha_x86_64_linux=$(awk '{print $1}' dist/proc-janitor-${tag}-x86_64-unknown-linux-gnu.tar.gz.sha256)
-
-          # Clone homebrew-tap
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/jhlee0409/homebrew-tap.git" tap
-          cd tap
-
-          # Generate updated formula
-          cat > Formula/proc-janitor.rb << EOF
-          class ProcJanitor < Formula
-            desc "Automatic orphan process cleanup daemon for macOS"
-            homepage "https://github.com/jhlee0409/proc-janitor"
-            license "MIT"
-            version "${version}"
-
-            on_macos do
-              if Hardware::CPU.arm?
-                url "https://github.com/jhlee0409/proc-janitor/releases/download/v#{version}/proc-janitor-v#{version}-aarch64-apple-darwin.tar.gz"
-                sha256 "${sha_aarch64_darwin}"
-              else
-                url "https://github.com/jhlee0409/proc-janitor/releases/download/v#{version}/proc-janitor-v#{version}-x86_64-apple-darwin.tar.gz"
-                sha256 "${sha_x86_64_darwin}"
-              end
-            end
-
-            on_linux do
-              if Hardware::CPU.arm?
-                url "https://github.com/jhlee0409/proc-janitor/releases/download/v#{version}/proc-janitor-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-                sha256 "${sha_aarch64_linux}"
-              else
-                url "https://github.com/jhlee0409/proc-janitor/releases/download/v#{version}/proc-janitor-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-                sha256 "${sha_x86_64_linux}"
-              end
-            end
-
-            def install
-              bin.install "proc-janitor"
-            end
-
-            service do
-              run [opt_bin/"proc-janitor", "start", "--foreground"]
-              keep_alive true
-              log_path var/"log/proc-janitor.log"
-              error_log_path var/"log/proc-janitor-error.log"
-            end
-
-            test do
-              assert_match "proc-janitor", shell_output("#{bin}/proc-janitor version")
-            end
-          end
-          EOF
-
-          # Remove leading whitespace from heredoc
-          sed -i 's/^          //' Formula/proc-janitor.rb
-
-          # Commit and push
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/proc-janitor.rb
-          git commit -m "Update proc-janitor to ${version}"
-          git push
+          {
+            echo "### Homebrew"
+            echo
+            echo "The tap updates itself (daily schedule). To publish now:"
+            echo
+            echo '```'
+            echo "gh workflow run update-formula.yml -R jhlee0409/homebrew-tap"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

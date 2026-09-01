@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The Homebrew formula is no longer pushed from the release workflow.** That job
+  cloned the tap and committed, which needs a cross-repo token
+  (`HOMEBREW_TAP_TOKEN`). The token expired and the job failed with "Invalid
+  username or token" on **every release from v0.8.3 through v0.10.1 — five in a
+  row** — while the build and release jobs stayed green, so the failure was easy to
+  miss and the formula was updated by hand each time.
+
+  The tap pulls now: a workflow there reads this repo's latest release and commits
+  with its own `GITHUB_TOKEN`, which is scoped to that repository and does not
+  expire. There is no secret left to rotate, and it is self-healing — a missed or
+  failed run is picked up by the next scheduled one instead of leaving the formula
+  stale until someone notices. It runs daily; to publish immediately after a
+  release:
+
+  ```bash
+  gh workflow run update-formula.yml -R jhlee0409/homebrew-tap
+  ```
+
+  Verified end to end on the tap: the no-op path makes no commit when the formula
+  is current, and reverting the formula to 0.10.0 on purpose had it restored to
+  0.10.1 within 6 s, with all four checksums matching the published release
+  assets. `HOMEBREW_TAP_TOKEN` can be deleted from this repository's secrets.
+
 ## [0.10.1] - 2026-09-01
 
 ### Security

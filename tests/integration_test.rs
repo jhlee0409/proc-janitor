@@ -999,3 +999,52 @@ fn test_session_clean_fallback_spares_unmatched_processes() {
          bypass the target/whitelist model. Output: {combined}"
     );
 }
+
+/// `AGENTS.md` states: "Never introduce `unsafe` code or new `unwrap()` calls".
+///
+/// That rule was broken silently once — two `unsafe` blocks reached a release
+/// before anyone noticed — so it is pinned here rather than left to review. A
+/// stated invariant that nothing checks is a preference, not a rule.
+///
+/// If a future change genuinely needs `unsafe`, the honest move is to update
+/// `AGENTS.md` and this test together, with the justification, instead of
+/// quietly adding it.
+#[test]
+fn test_src_contains_no_unsafe_code() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders = Vec::new();
+
+    for entry in std::fs::read_dir(&src).expect("failed to read src/") {
+        let path = entry.expect("bad dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("failed to read source file");
+        for (i, line) in text.lines().enumerate() {
+            let code = line.trim_start();
+            // Comments and doc comments may legitimately discuss `unsafe`.
+            if code.starts_with("//") {
+                continue;
+            }
+            // Only the keyword in a code position, not substrings like
+            // `unsafely` or a string literal mentioning it.
+            let is_keyword = code
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|token| token == "unsafe");
+            if is_keyword {
+                offenders.push(format!(
+                    "{}:{}: {}",
+                    path.file_name().unwrap().to_string_lossy(),
+                    i + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "src/ must contain no `unsafe` code (AGENTS.md), found:\n  {}",
+        offenders.join("\n  ")
+    );
+}

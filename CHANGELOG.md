@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`exec` no longer uses `unsafe`.** `AGENTS.md` forbids introducing `unsafe`,
+  and 0.9.1 shipped two blocks in `src/exec.rs` — the only ones in the crate —
+  against that rule. Both are gone, and the code is simpler for it:
+  - `SIGINT`/`SIGTERM` are now *caught* via `signal_hook::flag::register` (a safe
+    API) instead of being set to `SIG_IGN` through `nix`'s unsafe `signal()`.
+  - That removed the need for the `Command::pre_exec` hook as well. POSIX resets
+    *caught* signals to their default action across `exec` while `SIG_IGN` is
+    inherited, so the supervised command keeps normal signal behaviour with no
+    work in the child at all.
+
+  All four behaviours were re-verified against the release binary: a `SIGTERM`
+  aimed at the wrapper still terminates the command (2/2), the command still dies
+  from a `SIGTERM` of its own, parent death still cleans up, and a process-group
+  `SIGINT` (what Ctrl-C sends) still takes both down.
+- The no-`unsafe` rule is now pinned by `test_src_contains_no_unsafe_code`. It
+  was broken silently once; a stated invariant that nothing checks is a
+  preference, not a rule.
+
+### Notes
+- `daemonize` (RUSTSEC-2025-0069, unmaintained) is kept deliberately. Replacing
+  it by hand needs `nix::unistd::fork`, which is `unsafe fn`, so a replacement
+  would trade an advisory *warning* for an actual rule violation plus hand-rolled
+  fork/dup2 logic. The dependency-free alternative is to drop background mode
+  entirely — every documented path (LaunchAgent, systemd unit, `brew services`)
+  already runs `start --foreground` — but that changes what `proc-janitor start`
+  does and is a product decision, not a cleanup.
+
 ## [0.10.0] - 2026-09-01
 
 ### Security

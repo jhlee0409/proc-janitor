@@ -30,12 +30,14 @@ Rust daemon + CLI that polls the process table to detect and kill orphaned proce
 - Read `CLAUDE.md` first for build commands and architecture overview
 - `cargo build` must succeed before `cargo test` (integration tests invoke the binary)
 - All fs2 calls use fully qualified syntax (`fs2::FileExt::lock_exclusive(...)`)
-- Never introduce `unsafe` code or new `unwrap()` calls
+- Never introduce `unsafe` code or new `unwrap()` calls. The `unsafe` half is pinned by
+  `test_src_contains_no_unsafe_code`; if a change genuinely needs it, update the rule and that test
+  together with the justification rather than adding it quietly
 
 ### Testing Requirements
 ```bash
 cargo build          # Must pass first
-cargo test           # 111 tests (79 unit + 32 integration)
+cargo test           # 112 tests (79 unit + 33 integration)
 cargo check --target x86_64-unknown-linux-gnu --all-targets   # cfg-gated Linux path
 cargo clippy --all-targets   # Must be warning-free, tests included. Run on an up-to-date `stable`: CI uses
                      # dtolnay/rust-toolchain@stable, so an older local toolchain
@@ -65,6 +67,11 @@ cargo audit          # CI fails on advisories; keep the lockfile current
 - `daemon`/`clean` = cleanup after the fact (pattern-based); `exec` = prevention (parent-death link, no patterns)
 - The scan interval bounds *discovery* only; reacting to orphaning is event-driven (`watch::ExitWaiter`, kqueue NOTE_EXIT). Never reintroduce a plain `thread::sleep` in the daemon loop
 - kqueue registration and waiting MUST be one `kevent` call: a separate registration call returns already-pending events in its own eventlist and silently drops them
+- Background daemonization stays on the `daemonize` crate even though it is unmaintained
+  (RUSTSEC-2025-0069): hand-rolling it needs `nix::unistd::fork`, which is `unsafe fn`, so a
+  replacement would trade a warning for a rule violation. The dependency-free option is to drop
+  background mode entirely — every documented path (plist, systemd unit, brew services) already
+  uses `--foreground` — but that changes `start`'s behaviour and is a product decision
 - Session subsystem is independent with its own JSON persistence + file locking
 - `session clean`: explicitly tracked PIDs are killed unfiltered (naming a PID is consent); with nothing
   tracked it falls back to the parent's descendants filtered by target/whitelist patterns. The fallback MUST

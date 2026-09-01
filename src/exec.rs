@@ -114,29 +114,17 @@ pub fn run(command: &[String], sigterm_timeout: u64) -> Result<i32> {
 /// Signals that must take the supervised command down with us.
 const FORWARDED_SIGNALS: [Signal; 2] = [Signal::SIGINT, Signal::SIGTERM];
 
-/// Spawn the command, restoring default signal dispositions in the child.
+/// Spawn the command.
 ///
-/// The parent ignores `SIGINT`/`SIGTERM` so it can observe them instead of dying
-/// on delivery, but dispositions survive `exec`, so the child would inherit the
-/// ignore and become unkillable by Ctrl-C. Reset them in the forked child before
-/// it execs.
+/// No signal work is needed in the child: this process *catches*
+/// `SIGINT`/`SIGTERM` rather than ignoring them, and POSIX resets caught signals
+/// to their default action across `exec` — only `SIG_IGN` would have been
+/// inherited. So the command keeps normal signal behaviour for free, with no
+/// `pre_exec` hook and no `unsafe`.
 fn spawn_child(program: &str, args: &[String]) -> Result<Child> {
-    use std::os::unix::process::CommandExt;
-
-    let mut cmd = Command::new(program);
-    cmd.args(args);
-    // SAFETY: `signal()` is async-signal-safe and this is the only work done
-    // between fork and exec.
-    unsafe {
-        cmd.pre_exec(|| {
-            for sig in FORWARDED_SIGNALS {
-                nix::sys::signal::signal(sig, nix::sys::signal::SigHandler::SigDfl)
-                    .map_err(std::io::Error::from)?;
-            }
-            Ok(())
-        });
-    }
-    cmd.spawn()
+    Command::new(program)
+        .args(args)
+        .spawn()
         .with_context(|| format!("Failed to execute '{program}'"))
 }
 
@@ -243,6 +231,11 @@ fn signal_tree(root: u32, signal: Signal) {
 struct ParentWatch {
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
     kq: nix::sys::event::Kqueue,
+    /// Keeps the `SIGINT`/`SIGTERM` handler registrations alive for as long as
+    /// the watch exists. Dropping them would restore the default action and this
+    /// process would die on delivery, orphaning the command.
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    _signal_handlers: Vec<signal_hook::SigId>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
@@ -294,21 +287,31 @@ mod kqueue_watch {
                 let _ = kq.kevent(&[exit_event(parent.as_raw() as u32)], &mut [], None);
             }
 
-            // Ignore first, then watch: between the two, a signal would kill us
-            // and orphan the command. `spawn_child` restores the defaults in the
-            // child so it stays normally killable.
+            // Catch the signals before watching for them: in between, delivery
+            // would still run the default action and orphan the command.
+            //
+            // A *handler* rather than `SIG_IGN`, for two reasons. It is available
+            // through a safe API (`signal_hook::flag::register`), and POSIX resets
+            // caught signals to their default action across `exec` while
+            // `SIG_IGN` is inherited — so the command stays normally killable
+            // without any work in the child. The flag itself is unused; the
+            // registration exists to displace the fatal default, and `kevent`
+            // below is what actually reports the delivery.
+            let mut handlers = Vec::with_capacity(super::FORWARDED_SIGNALS.len());
             for sig in super::FORWARDED_SIGNALS {
-                // SAFETY: setting a disposition to SIG_IGN is async-signal-safe
-                // and affects only this process.
-                unsafe {
-                    nix::sys::signal::signal(sig, nix::sys::signal::SigHandler::SigIgn)
-                        .with_context(|| format!("Failed to take over {sig:?}"))?;
-                }
+                let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                handlers.push(
+                    signal_hook::flag::register(sig as i32, flag)
+                        .with_context(|| format!("Failed to catch {sig:?}"))?,
+                );
                 kq.kevent(&[signal_event(sig)], &mut [], None)
                     .with_context(|| format!("Failed to watch for {sig:?}"))?;
             }
 
-            Ok(Self { kq })
+            Ok(Self {
+                kq,
+                _signal_handlers: handlers,
+            })
         }
 
         pub(super) fn add_child(&mut self, child: u32) -> Result<()> {

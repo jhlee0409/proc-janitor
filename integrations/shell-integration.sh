@@ -1,6 +1,16 @@
 #!/bin/bash
 # Shell Integration for proc-janitor
-# Add this to your .bashrc or .zshrc for automatic session tracking
+# Add this to your .bashrc or .zshrc.
+#
+# What it does: registers one session per shell, recording the shell as the
+# session's parent, and runs `session clean` when the shell exits.
+#
+# What `session clean` then kills: descendants of this shell whose command line
+# matches a target pattern in your config and is not whitelisted — the same rule
+# `proc-janitor scan` uses. Nothing else in the terminal is touched. If no target
+# patterns are configured, it kills nothing.
+#
+# Use `pj-track` (below) only to clean up something the patterns do NOT match.
 #
 # Usage: source this file or copy the relevant section to your shell config
 
@@ -63,7 +73,14 @@ fi
 # Helper functions
 # ============================================================================
 
-# Track a specific command's processes
+# Track a specific command so `session clean` kills it even if no target pattern
+# matches it. Explicitly tracked PIDs are killed with their whole subtree and
+# without pattern filtering — naming a PID is consent.
+#
+# Note: the command is run in the background and waited on, so it does not get
+# the terminal's foreground process group. Use it for background/non-interactive
+# work (dev servers, watchers); an interactive program will not receive Ctrl-C
+# properly through it.
 pj-track() {
     if [ -z "$PROC_JANITOR_SESSION" ]; then
         echo "No proc-janitor session active"

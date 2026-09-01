@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`session clean` now does something when nothing was tracked.** A session
+  registered without explicit `session track` calls had `pids: []`, so
+  `session clean` found nothing and killed nothing. The shell integration was
+  built entirely on that path — register a session at shell startup, run
+  `session clean` on exit — which made it pure ceremony.
+
+  With nothing tracked, cleanup now falls back to the descendants of the
+  session's parent that match a target pattern and are not whitelisted, i.e. the
+  same rule `scan` and the daemon apply. Explicitly tracked PIDs keep their old
+  behaviour: killed with their whole subtree and no pattern filtering, because
+  naming a PID is consent.
+
+  The fallback is deliberately pattern-gated. Unfiltered it would be "kill every
+  process in the terminal", which would bypass the target/whitelist model the rest
+  of the tool rests on — `test_session_clean_fallback_spares_unmatched_processes`
+  pins that a non-matching process survives, and fails if the filter is removed.
+  With no target patterns configured the fallback kills nothing.
+
+  The output states which mode ran, so it is never ambiguous what a given
+  `session clean` was allowed to touch.
+- `integrations/shell-integration.sh` describes what actually happens instead of
+  implying automatic tracking, and documents that `pj-track` is only needed for
+  processes the target patterns do *not* match — including its real limitation
+  (it backgrounds the command, so an interactive program will not receive Ctrl-C
+  through it).
+
 ## [0.9.1] - 2026-08-30
 
 ### Fixed

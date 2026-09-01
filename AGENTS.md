@@ -35,7 +35,7 @@ Rust daemon + CLI that polls the process table to detect and kill orphaned proce
 ### Testing Requirements
 ```bash
 cargo build          # Must pass first
-cargo test           # 120 tests (90 unit + 30 integration)
+cargo test           # 122 tests (90 unit + 32 integration)
 cargo check --target x86_64-unknown-linux-gnu --all-targets   # cfg-gated Linux path
 cargo clippy         # Must be warning-free. Run on an up-to-date `stable`: CI uses
                      # dtolnay/rust-toolchain@stable, so an older local toolchain
@@ -63,6 +63,9 @@ cargo fmt --check    # CI enforces formatting
 - The scan interval bounds *discovery* only; reacting to orphaning is event-driven (`watch::ExitWaiter`, kqueue NOTE_EXIT). Never reintroduce a plain `thread::sleep` in the daemon loop
 - kqueue registration and waiting MUST be one `kevent` call: a separate registration call returns already-pending events in its own eventlist and silently drops them
 - Session subsystem is independent with its own JSON persistence + file locking
+- `session clean`: explicitly tracked PIDs are killed unfiltered (naming a PID is consent); with nothing
+  tracked it falls back to the parent's descendants filtered by target/whitelist patterns. The fallback MUST
+  stay pattern-gated — unfiltered it would kill every process in the terminal and bypass the safety model
 
 ## Dependencies
 

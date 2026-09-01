@@ -393,6 +393,15 @@ Every config option can be overridden via environment variables. Values outside 
 
 Track related processes as a group. Each tracked PID stores its start_time for PID reuse detection — session cleanup verifies process identity before sending signals, even hours after registration.
 
+`session clean` has two modes, which differ in how much they trust the caller:
+
+| Session state | What is killed |
+|---------------|----------------|
+| Has explicitly tracked PIDs | Those PIDs and their whole subtrees, **without** pattern filtering — naming a PID via `session track` is consent |
+| Nothing tracked | Descendants of the session's parent that match a target pattern and are not whitelisted — the same rule `scan` uses |
+
+The second mode is what makes the [shell integration](integrations/shell-integration.sh) useful: a shell registers one session at startup and runs `session clean` on exit, so closing the terminal cleans up the target processes it started and nothing else. With no target patterns configured it kills nothing.
+
 ```bash
 proc-janitor session register --name "my-session" --source terminal
 proc-janitor session register --id custom-id --name "dev" --source vscode --parent-pid 1234

@@ -367,6 +367,59 @@ pub fn track(session_id: &str, pid: u32) -> Result<()> {
     }
 }
 
+/// Descendants of `parent` that a `scan` would also select: matching a target
+/// pattern and not whitelisted.
+///
+/// Used when a session has no explicitly tracked PIDs. Invalid patterns are
+/// skipped rather than fatal — refusing to clean because one regex is broken
+/// would be worse than cleaning what the valid ones match, and `config validate`
+/// is where bad patterns get reported.
+fn target_matching_descendants(
+    sys: &System,
+    parent: u32,
+    config: &crate::config::Config,
+) -> Vec<u32> {
+    let compile = |patterns: &[String]| -> Vec<regex::Regex> {
+        patterns
+            .iter()
+            .filter_map(|p| match regex::Regex::new(p) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    tracing::warn!("Ignoring invalid pattern '{p}': {e}");
+                    None
+                }
+            })
+            .collect()
+    };
+    let targets = compile(&config.targets);
+    let whitelist = compile(&config.whitelist);
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let self_pid = std::process::id();
+    find_descendant_pids(sys, &[parent])
+        .into_iter()
+        // The parent is the terminal itself, and this very process is one of its
+        // children.
+        .filter(|pid| *pid != parent && *pid != self_pid)
+        .filter(|pid| {
+            let Some(process) = sys.process(sysinfo::Pid::from_u32(*pid)) else {
+                return false;
+            };
+            let cmdline = process
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ");
+            !cmdline.is_empty()
+                && crate::scanner::matches_any(&targets, &cmdline)
+                && !crate::scanner::matches_any(&whitelist, &cmdline)
+        })
+        .collect()
+}
+
 /// Clean up a specific session's processes
 pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
     let (mut store, file) = SessionStore::load_exclusive()?;
@@ -376,24 +429,53 @@ pub fn clean_session(session_id: &str, dry_run: bool) -> Result<()> {
         .with_context(|| format!("Session not found: {session_id}"))?
         .clone();
 
-    println!(
-        "Cleaning session: {} ({}) - {} tracked PIDs",
-        session_id,
-        session.source,
-        session.pids.len()
-    );
-
-    // Load config for sigterm_timeout
-    let sigterm_timeout = crate::config::Config::load()
-        .map(|c| c.sigterm_timeout)
-        .unwrap_or(5);
+    // Load config once: needed for sigterm_timeout and, in the fallback below,
+    // for the target/whitelist patterns.
+    let config = crate::config::Config::load().unwrap_or_default();
+    let sigterm_timeout = config.sigterm_timeout;
 
     // Get current process list
     let mut sys = crate::util::process_snapshot();
 
-    // Find all descendant processes
+    // Two modes, deliberately different in how much they trust the caller.
+    //
+    // Explicitly tracked PIDs are killed with their whole subtree and no pattern
+    // filtering: naming a PID via `session track` is explicit consent.
+    //
+    // With nothing tracked there is no consent to lean on, so falling back to
+    // "everything under the parent" would kill every process in the terminal and
+    // bypass the target/whitelist model the daemon relies on. The fallback is
+    // therefore restricted to processes that match a target pattern and are not
+    // whitelisted — the same rule `scan`/`clean` apply. Without this the shell
+    // integration was pure ceremony: it registered a session and ran
+    // `session clean` on exit, which had nothing to clean and killed nothing.
     let root_pids: Vec<u32> = session.pids.iter().map(|tp| tp.pid).collect();
-    let pids_to_clean = find_descendant_pids(&sys, &root_pids);
+    let pids_to_clean = if !root_pids.is_empty() {
+        println!(
+            "Cleaning session: {} ({}) - {} tracked PIDs",
+            session_id,
+            session.source,
+            root_pids.len()
+        );
+        find_descendant_pids(&sys, &root_pids)
+    } else {
+        match session.parent_pid {
+            Some(parent) => {
+                println!(
+                    "Cleaning session: {} ({}) - no tracked PIDs, matching target patterns under parent {}",
+                    session_id, session.source, parent
+                );
+                target_matching_descendants(&sys, parent, &config)
+            }
+            None => {
+                println!(
+                    "Cleaning session: {} ({}) - no tracked PIDs and no parent recorded",
+                    session_id, session.source
+                );
+                Vec::new()
+            }
+        }
+    };
 
     // Build start_time map: capture live start_times for ALL PIDs (including descendants),
     // then override with stored start_times for tracked root PIDs (more authoritative).

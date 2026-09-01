@@ -845,3 +845,157 @@ fn test_daemon_reacts_before_the_next_scan() {
         "reaction took {reacted_in:?}, expected under {budget:?} ({mechanism})"
     );
 }
+
+/// Write a config whose only target pattern is `marker`.
+fn write_config(home: &TempDir, marker: &str) -> std::path::PathBuf {
+    let cfg_dir = home.path().join(".config").join("proc-janitor");
+    std::fs::create_dir_all(&cfg_dir).expect("Failed to create config dir");
+    let cfg_path = cfg_dir.join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "scan_interval = 5\n\
+             grace_period = 0\n\
+             sigterm_timeout = 2\n\
+             targets = [\"{marker}\"]\n\
+             whitelist = []\n\
+             \n\
+             [logging]\n\
+             enabled = false\n\
+             path = \"{}\"\n\
+             retention_days = 7\n",
+            home.path().join(".proc-janitor").join("logs").display()
+        ),
+    )
+    .expect("Failed to write config");
+    cfg_path
+}
+
+/// `session clean` on a session with nothing tracked must clean the parent's
+/// target-matching descendants.
+///
+/// Without this the shell integration was ceremony: it registered a session and
+/// ran `session clean` on shell exit, which had no tracked PIDs and therefore
+/// killed nothing.
+#[test]
+fn test_session_clean_falls_back_to_target_patterns() {
+    let home = sandbox();
+    let marker = format!("pjsess_hit_{}", std::process::id());
+    write_config(&home, &marker);
+
+    // This test process stands in for the terminal: the probe is its child, so
+    // `--parent-pid` points at something with a matching descendant.
+    let mut probe = Command::new("sh")
+        .arg("-c")
+        .arg(format!("sleep 30; : {marker}"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("Failed to spawn the probe");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(marker_count(&marker) > 0, "probe did not start");
+
+    let out = pj(&home)
+        .args([
+            "session",
+            "register",
+            "--id",
+            "s1",
+            "--source",
+            "terminal",
+            "--parent-pid",
+            &std::process::id().to_string(),
+        ])
+        .output()
+        .expect("register failed");
+    assert!(out.status.success(), "register did not succeed");
+
+    let out = pj(&home)
+        .args(["session", "clean", "s1"])
+        .output()
+        .expect("clean failed");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while marker_count(&marker) > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let remaining = marker_count(&marker);
+    kill_marker(&marker);
+    let _ = probe.kill();
+    let _ = probe.wait();
+
+    assert_eq!(
+        remaining, 0,
+        "untracked session did not clean the matching descendant. Output: {combined}"
+    );
+}
+
+/// The safety property of that fallback: with nothing tracked, a process the
+/// target patterns do **not** match must survive.
+///
+/// `session clean` kills explicitly tracked PIDs without pattern filtering,
+/// because naming a PID is consent. The fallback has no such consent, so it must
+/// not become "kill everything in the terminal" — that would bypass the
+/// target/whitelist model the rest of the tool is built on.
+#[test]
+fn test_session_clean_fallback_spares_unmatched_processes() {
+    let home = sandbox();
+    // The config targets this marker...
+    let target_marker = format!("pjsess_t_{}", std::process::id());
+    write_config(&home, &target_marker);
+    // ...while the probe carries a different one, so it must not be touched.
+    let bystander = format!("pjsess_bystander_{}", std::process::id());
+
+    let mut probe = Command::new("sh")
+        .arg("-c")
+        .arg(format!("sleep 30; : {bystander}"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("Failed to spawn the bystander");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(marker_count(&bystander) > 0, "bystander did not start");
+
+    assert!(pj(&home)
+        .args([
+            "session",
+            "register",
+            "--id",
+            "s2",
+            "--source",
+            "terminal",
+            "--parent-pid",
+            &std::process::id().to_string(),
+        ])
+        .output()
+        .expect("register failed")
+        .status
+        .success());
+
+    let out = pj(&home)
+        .args(["session", "clean", "s2"])
+        .output()
+        .expect("clean failed");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let survived = marker_count(&bystander) > 0;
+    kill_marker(&bystander);
+    let _ = probe.kill();
+    let _ = probe.wait();
+
+    assert!(
+        survived,
+        "the fallback killed a process no target pattern matches — it must not \
+         bypass the target/whitelist model. Output: {combined}"
+    );
+}

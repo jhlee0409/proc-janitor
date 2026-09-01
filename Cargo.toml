@@ -1,6 +1,6 @@
 [package]
 name = "proc-janitor"
-version = "0.9.1"
+version = "0.10.0"
 edition = "2021"
 # Verified in CI (the `msrv` job) against the committed Cargo.lock.
 #

@@ -122,7 +122,7 @@ fn check_targets_configured() -> bool {
                 let unmatched: Vec<&String> = config
                     .targets
                     .iter()
-                    .filter(|pattern| match regex::Regex::new(pattern) {
+                    .filter(|pattern| match crate::scanner::compile_pattern(pattern) {
                         Ok(re) => !cmdlines.iter().any(|c| re.is_match(c)),
                         Err(_) => false, // reported by the validation check
                     })
@@ -182,7 +182,7 @@ fn check_self_matching_patterns() -> bool {
     let compile = |patterns: &[String]| -> Vec<regex::Regex> {
         patterns
             .iter()
-            .filter_map(|p| regex::Regex::new(p).ok())
+            .filter_map(|p| crate::scanner::compile_pattern(p).ok())
             .collect()
     };
     let whitelist = compile(&config.whitelist);
@@ -195,7 +195,7 @@ fn check_self_matching_patterns() -> bool {
         .targets
         .iter()
         .filter(|p| {
-            regex::Regex::new(p)
+            crate::scanner::compile_pattern(p)
                 .map(|re| re.is_match(&daemon_cmdline))
                 .unwrap_or(false)
         })

@@ -382,7 +382,7 @@ fn target_matching_descendants(
     let compile = |patterns: &[String]| -> Vec<regex::Regex> {
         patterns
             .iter()
-            .filter_map(|p| match regex::Regex::new(p) {
+            .filter_map(|p| match crate::scanner::compile_pattern(p) {
                 Ok(re) => Some(re),
                 Err(e) => {
                     tracing::warn!("Ignoring invalid pattern '{p}': {e}");

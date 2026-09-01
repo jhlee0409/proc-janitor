@@ -1048,3 +1048,81 @@ fn test_src_contains_no_unsafe_code() {
         offenders.join("\n  ")
     );
 }
+
+/// A config that exists but cannot be loaded must stop the daemon, not be
+/// replaced by the built-in defaults.
+///
+/// `Config::load()` returns empty targets when there is *no* config file, so an
+/// error means the user has a config expressing intent that could not be
+/// honoured. Substituting `Config::default()` turned "kill only my marker" into
+/// "kill `node.*claude`, `claude`, `node.*mcp`" — the built-in patterns — after a
+/// single missing comma. The daemon not running is loud and harmless; killing
+/// processes the user never chose is neither.
+#[test]
+fn test_daemon_refuses_a_config_it_cannot_load() {
+    let home = sandbox();
+    let cfg_dir = home.path().join(".config").join("proc-janitor");
+    std::fs::create_dir_all(&cfg_dir).expect("Failed to create config dir");
+    // Missing comma in the array: an ordinary TOML typo.
+    std::fs::write(
+        cfg_dir.join("config.toml"),
+        "scan_interval = 5\n\
+         grace_period = 30\n\
+         sigterm_timeout = 5\n\
+         targets = [\n    \"my_specific_marker\"\n    \"second_pattern\"\n]\n\
+         whitelist = []\n",
+    )
+    .expect("Failed to write config");
+
+    // Spawn rather than `output()`: if this ever regresses, the daemon enters its
+    // scan loop and never exits, and `output()` would block forever. A test that
+    // hangs on regression is worse than one that fails, so the deadline is part
+    // of the assertion.
+    let mut child = pj(&home)
+        .args(["start", "--foreground"])
+        .env("PROC_JANITOR_ALLOW_CONTAINER", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to run start");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        match child.try_wait().expect("Failed to poll start") {
+            Some(status) => break Some(status),
+            None if std::time::Instant::now() >= deadline => break None,
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    };
+
+    let still_running = status.is_none();
+    if still_running {
+        let _ = child.kill();
+    }
+    let output = child
+        .wait_with_output()
+        .expect("Failed to collect start output");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        !still_running,
+        "the daemon is still running after 10s despite an unloadable config: {combined}"
+    );
+    let status = status.expect("checked above");
+    assert!(
+        !status.success(),
+        "the daemon exited successfully despite an unloadable config: {combined}"
+    );
+    assert!(
+        !combined.contains("Daemon started"),
+        "the daemon entered its scan loop despite an unloadable config: {combined}"
+    );
+    assert!(
+        combined.contains("Refusing to start"),
+        "the error should say why it refused, got: {combined}"
+    );
+}

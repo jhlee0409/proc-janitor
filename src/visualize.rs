@@ -44,7 +44,7 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
     let target_patterns: Vec<Regex> = config
         .targets
         .iter()
-        .filter_map(|p| match Regex::new(p) {
+        .filter_map(|p| match crate::scanner::compile_pattern(p) {
             Ok(re) => Some(re),
             Err(e) => {
                 eprintln!("Warning: Invalid target pattern '{p}': {e}");
@@ -55,7 +55,7 @@ pub fn build_process_tree(config: &Config) -> Result<HashMap<u32, ProcessNode>> 
     let whitelist_patterns: Vec<Regex> = config
         .whitelist
         .iter()
-        .filter_map(|p| match Regex::new(p) {
+        .filter_map(|p| match crate::scanner::compile_pattern(p) {
             Ok(re) => Some(re),
             Err(e) => {
                 eprintln!("Warning: Invalid whitelist pattern '{p}': {e}");
@@ -118,7 +118,7 @@ pub fn print_tree(filter_targets: bool, pattern: Option<&str>) -> Result<()> {
 
     // Optional pattern filter
     let pattern_re = pattern
-        .map(Regex::new)
+        .map(crate::scanner::compile_pattern)
         .transpose()
         .map_err(|e| anyhow::anyhow!("Invalid tree filter pattern: {e}"))?;
 

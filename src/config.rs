@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -190,10 +189,12 @@ impl Config {
         }
 
         for pattern in &self.targets {
-            Regex::new(pattern).with_context(|| format!("Invalid target pattern: {pattern}"))?;
+            crate::scanner::compile_pattern(pattern)
+                .with_context(|| format!("Invalid target pattern: {pattern}"))?;
         }
         for pattern in &self.whitelist {
-            Regex::new(pattern).with_context(|| format!("Invalid whitelist pattern: {pattern}"))?;
+            crate::scanner::compile_pattern(pattern)
+                .with_context(|| format!("Invalid whitelist pattern: {pattern}"))?;
         }
         Ok(())
     }

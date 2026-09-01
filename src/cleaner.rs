@@ -3,7 +3,6 @@ use std::io::IsTerminal;
 
 use anyhow::Result;
 use nix::sys::signal::Signal;
-use regex::Regex;
 use serde::Serialize;
 
 use crate::config::Config;
@@ -170,7 +169,7 @@ pub fn clean_filtered(
         }
     }
     let pattern_re = pattern
-        .map(Regex::new)
+        .map(crate::scanner::compile_pattern)
         .transpose()
         .map_err(|e| anyhow::anyhow!("Invalid filter pattern: {e}"))?;
 
@@ -265,7 +264,7 @@ pub fn clean_interactive(
         }
     }
     let pattern_re = pattern
-        .map(Regex::new)
+        .map(crate::scanner::compile_pattern)
         .transpose()
         .map_err(|e| anyhow::anyhow!("Invalid filter pattern: {e}"))?;
 

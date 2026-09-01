@@ -185,14 +185,14 @@ impl Scanner {
         let target_patterns = config
             .targets
             .iter()
-            .map(|p| Regex::new(p))
+            .map(|p| compile_pattern(p))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("Invalid target regex pattern in configuration: {e}"))?;
 
         let whitelist_patterns = config
             .whitelist
             .iter()
-            .map(|p| Regex::new(p))
+            .map(|p| compile_pattern(p))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| {
                 anyhow::anyhow!("Invalid whitelist regex pattern in configuration: {e}")
@@ -384,6 +384,39 @@ impl Scanner {
     }
 }
 
+/// Compiled-size budget per pattern.
+///
+/// The config already limits how many patterns there are (100) and how long each
+/// one is (1024 chars), but neither bounds what a pattern costs to *compile*.
+/// Measured before this limit existed: 100 patterns of 39 characters
+/// (`(?i)(?:\p{L}|\p{N}|\p{P}){1,150}zzqq`) — a config that passes
+/// `config validate` — made a single scan take 7.5 s and 1,566 MB of peak RSS,
+/// which the daemon then holds for its whole lifetime. Unicode case folding
+/// combined with a bounded repetition is enough; no malice required.
+///
+/// `regex`'s own default is 10 MB per pattern, so 100 patterns could legitimately
+/// reach ~1 GB. 1 MB caps the whole target list at ~100 MB while being far more
+/// than any realistic process-matching pattern needs.
+const PATTERN_SIZE_LIMIT: usize = 1 << 20;
+
+/// Budget for the lazy DFA cache, which is match-time rather than compile-time
+/// memory.
+const PATTERN_DFA_SIZE_LIMIT: usize = 1 << 20;
+
+/// Compile one target/whitelist pattern.
+///
+/// The single compilation primitive for the whole crate, for the same reason
+/// [`matches_any`] is the single matching primitive: every caller must get the
+/// same resource limits, or the one that forgets becomes the way to exhaust
+/// memory. Over-budget patterns fail to compile, which is fail-closed — the
+/// daemon refuses to start and a config reload keeps the previous scanner.
+pub fn compile_pattern(pattern: &str) -> Result<Regex, regex::Error> {
+    regex::RegexBuilder::new(pattern)
+        .size_limit(PATTERN_SIZE_LIMIT)
+        .dfa_size_limit(PATTERN_DFA_SIZE_LIMIT)
+        .build()
+}
+
 /// True when `cmdline` matches any of `patterns`.
 ///
 /// The single matching primitive for the whole crate: the scanner uses it for
@@ -524,6 +557,45 @@ mod tests {
     #[test]
     fn test_matches_any_empty_never_matches() {
         assert!(!matches_any(&[], "anything at all"));
+    }
+
+    /// A pattern that passes the config's count and length limits can still be
+    /// ruinously expensive to compile. Before `compile_pattern` bounded it, 100
+    /// copies of this 39-character pattern — a config `config validate` accepted
+    /// — made one scan take 7.5 s and 1,566 MB of peak RSS, which the daemon then
+    /// held for its whole lifetime.
+    #[test]
+    fn test_compile_pattern_rejects_ruinous_patterns() {
+        let costly = r"(?i)(?:\p{L}|\p{N}|\p{P}){1,150}zzqq";
+        assert!(
+            costly.len() <= 1024,
+            "the point of this test is a pattern the config already allows"
+        );
+        let err = compile_pattern(costly)
+            .expect_err("a pattern this expensive must not compile silently");
+        assert!(
+            format!("{err}").contains("size limit"),
+            "expected a size-limit error, got: {err}"
+        );
+    }
+
+    /// The limit must not reject patterns anyone would actually write.
+    #[test]
+    fn test_compile_pattern_accepts_realistic_patterns() {
+        for pattern in [
+            "node.*claude",
+            "claude",
+            "node.*mcp",
+            "webpack|vite|esbuild",
+            r"^/usr/bin/python\d?",
+            r"(?i)cargo\s+(watch|build|test)",
+            &"a".repeat(1024),
+        ] {
+            assert!(
+                compile_pattern(pattern).is_ok(),
+                "should compile: {pattern}"
+            );
+        }
     }
 
     #[test]

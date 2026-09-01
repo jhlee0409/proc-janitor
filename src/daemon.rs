@@ -604,15 +604,25 @@ pub fn start(foreground: bool, dry_run: bool) -> Result<()> {
         tracing::info!("Removing stale PID file from previous crash...");
     }
 
-    // Load config
+    // A config that cannot be loaded must not be substituted with the built-in
+    // defaults. `Config::load()` already returns Ok with EMPTY targets when there
+    // is no config file (the 0.8.2 "safe by default" behaviour), so an Err here
+    // means the user has a config expressing intent that could not be honoured —
+    // an unparseable file, a pattern over the size limit, a value out of range.
+    // Falling back to `Config::default()` replaced that intent with
+    // `["node.*claude", "claude", "node.*mcp"]`, so a single missing comma turned
+    // "kill only my marker" into "kill Claude Code and MCP servers". Refuse
+    // instead: the daemon not running is loud and harmless, killing the wrong
+    // processes is neither.
     let config = match Config::load() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "Warning: Failed to load config ({e}). Using defaults. \
-                 Fix with: proc-janitor config init --force"
+            let _ = fs2::FileExt::unlock(&lock_file);
+            return Err(e).context(
+                "Refusing to start: the configuration could not be loaded, and \
+                 falling back to built-in defaults would kill processes you did not \
+                 choose. Fix the config (or 'proc-janitor config init --force')",
             );
-            Config::default()
         }
     };
 

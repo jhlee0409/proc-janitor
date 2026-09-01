@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **A config that cannot be loaded no longer starts the daemon with the built-in
+  kill patterns.** `Config::load()` returns *empty* targets when there is no
+  config file — the 0.8.2 "safe by default" behaviour — so an error means the user
+  has a config expressing intent that could not be honoured. `daemon::start` was
+  catching that error and substituting `Config::default()`, whose targets are
+  `["node.*claude", "claude", "node.*mcp"]`. A single missing comma therefore
+  turned "kill only `my_specific_marker`" into "kill Claude Code and MCP servers",
+  after printing a warning most users would never see. Verified against a real
+  malformed config before the fix: the daemon started and entered its scan loop.
+
+  This is arguably worse than the original 0.8.2 bug, because the user *did*
+  express intent and a typo silently replaced it with something destructive.
+  `start` now refuses, naming the cause, the consequence and the fix. `scan` and
+  `clean` already propagated the error correctly.
+
+- **Pattern compilation is bounded.** The config limits how many patterns there
+  are (100) and how long each is (1024 chars), but nothing bounded what a pattern
+  costs to *compile*. Measured: 100 copies of a 39-character pattern
+  (`(?i)(?:\p{L}|\p{N}|\p{P}){1,150}zzqq`) — a config `config validate`
+  accepted — made a single scan take **7.5 s and 1,566 MB of peak RSS**, which the
+  daemon then holds for its entire lifetime. Unicode case folding plus a bounded
+  repetition is enough; no malice required, and a machine under memory pressure
+  would simply OOM-kill the daemon.
+
+  All 11 compilation sites now go through `scanner::compile_pattern`, which sets a
+  1 MB compiled-size and DFA-cache budget per pattern (`regex`'s own default is
+  10 MB, so 100 patterns could legitimately reach ~1 GB). The same config now
+  fails in 0.01 s at 10 MB with `Compiled regex exceeds size limit of 1048576
+  bytes` — fail-closed, since an invalid pattern already means the daemon refuses
+  to start and a reload keeps the previous scanner.
+
 ### Changed
 - **`exec` no longer uses `unsafe`.** `AGENTS.md` forbids introducing `unsafe`,
   and 0.9.1 shipped two blocks in `src/exec.rs` — the only ones in the crate —

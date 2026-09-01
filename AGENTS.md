@@ -35,7 +35,7 @@ Rust daemon + CLI that polls the process table to detect and kill orphaned proce
 ### Testing Requirements
 ```bash
 cargo build          # Must pass first
-cargo test           # 119 tests (90 unit + 29 integration)
+cargo test           # 120 tests (90 unit + 30 integration)
 cargo check --target x86_64-unknown-linux-gnu --all-targets   # cfg-gated Linux path
 cargo clippy         # Must be warning-free. Run on an up-to-date `stable`: CI uses
                      # dtolnay/rust-toolchain@stable, so an older local toolchain

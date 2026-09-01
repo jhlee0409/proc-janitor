@@ -38,7 +38,8 @@ use nix::unistd::{getppid, Pid};
 /// How often the child is polled for exit while it is being terminated.
 const TERMINATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Run `command`, terminating it if this process's parent exits first.
+/// Run `command`, terminating it if this process's parent exits first — or if
+/// this process is itself told to stop.
 ///
 /// Returns the exit code to propagate: the command's own code when it finishes on
 /// its own, or `128 + signal` when it was terminated.
@@ -62,10 +63,7 @@ pub fn run(command: &[String], sigterm_timeout: u64) -> Result<i32> {
         );
     }
 
-    let mut child = Command::new(program)
-        .args(args)
-        .spawn()
-        .with_context(|| format!("Failed to execute '{program}'"))?;
+    let mut child = spawn_child(program, args)?;
     let child_pid = child.id();
 
     if parent_already_gone {
@@ -92,13 +90,62 @@ pub fn run(command: &[String], sigterm_timeout: u64) -> Result<i32> {
             let signal = terminate_tree(&mut child, sigterm_timeout);
             Ok(128 + signal as i32)
         }
+        Exited::Signalled(received) => {
+            // Without this, a `kill` aimed at proc-janitor itself would leave the
+            // command running with PPID=1 — exactly the state this subcommand
+            // exists to prevent. Ctrl-C is unaffected either way: the child is
+            // deliberately in the same process group, so the terminal already
+            // signals both.
+            eprintln!(
+                "proc-janitor exec: received {received:?}; terminating '{program}' (PID {child_pid}).",
+            );
+            tracing::info!(
+                signal = ?received,
+                child = child_pid,
+                program = program.as_str(),
+                "signalled, terminating supervised command"
+            );
+            let signal = terminate_tree(&mut child, sigterm_timeout);
+            Ok(128 + signal as i32)
+        }
     }
 }
 
-/// Which process the wait observed exiting first.
+/// Signals that must take the supervised command down with us.
+const FORWARDED_SIGNALS: [Signal; 2] = [Signal::SIGINT, Signal::SIGTERM];
+
+/// Spawn the command, restoring default signal dispositions in the child.
+///
+/// The parent ignores `SIGINT`/`SIGTERM` so it can observe them instead of dying
+/// on delivery, but dispositions survive `exec`, so the child would inherit the
+/// ignore and become unkillable by Ctrl-C. Reset them in the forked child before
+/// it execs.
+fn spawn_child(program: &str, args: &[String]) -> Result<Child> {
+    use std::os::unix::process::CommandExt;
+
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    // SAFETY: `signal()` is async-signal-safe and this is the only work done
+    // between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            for sig in FORWARDED_SIGNALS {
+                nix::sys::signal::signal(sig, nix::sys::signal::SigHandler::SigDfl)
+                    .map_err(std::io::Error::from)?;
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn()
+        .with_context(|| format!("Failed to execute '{program}'"))
+}
+
+/// What ended the wait.
 enum Exited {
     Parent,
     Child,
+    /// This process was signalled and must take the command with it.
+    Signalled(Signal),
 }
 
 /// Reap the child and translate its wait status into an exit code.
@@ -204,6 +251,7 @@ mod kqueue_watch {
     use anyhow::{Context, Result};
     use nix::errno::Errno;
     use nix::sys::event::{EventFilter, EventFlag, FilterFlag, KEvent, Kqueue};
+    use nix::sys::signal::Signal;
     use nix::unistd::Pid;
 
     fn exit_event(pid: u32) -> KEvent {
@@ -217,8 +265,24 @@ mod kqueue_watch {
         )
     }
 
+    /// An `EVFILT_SIGNAL` registration.
+    ///
+    /// The signal must be ignored for this to be useful: `EVFILT_SIGNAL` reports
+    /// delivery *in addition to* the normal disposition, so leaving the default
+    /// action in place would kill this process before it could react.
+    fn signal_event(sig: Signal) -> KEvent {
+        KEvent::new(
+            sig as i32 as usize,
+            EventFilter::EVFILT_SIGNAL,
+            EventFlag::EV_ADD,
+            FilterFlag::empty(),
+            0,
+            0,
+        )
+    }
+
     impl ParentWatch {
-        /// Register `NOTE_EXIT` for the parent.
+        /// Register `NOTE_EXIT` for the parent, and take over `SIGINT`/`SIGTERM`.
         ///
         /// Verified unprivileged on macOS 25.6, including PIDs owned by root or
         /// another user, and for processes this one did not spawn.
@@ -229,6 +293,21 @@ mod kqueue_watch {
                 // re-checks `getppid()` and handles that case.
                 let _ = kq.kevent(&[exit_event(parent.as_raw() as u32)], &mut [], None);
             }
+
+            // Ignore first, then watch: between the two, a signal would kill us
+            // and orphan the command. `spawn_child` restores the defaults in the
+            // child so it stays normally killable.
+            for sig in super::FORWARDED_SIGNALS {
+                // SAFETY: setting a disposition to SIG_IGN is async-signal-safe
+                // and affects only this process.
+                unsafe {
+                    nix::sys::signal::signal(sig, nix::sys::signal::SigHandler::SigIgn)
+                        .with_context(|| format!("Failed to take over {sig:?}"))?;
+                }
+                kq.kevent(&[signal_event(sig)], &mut [], None)
+                    .with_context(|| format!("Failed to watch for {sig:?}"))?;
+            }
+
             Ok(Self { kq })
         }
 
@@ -239,11 +318,10 @@ mod kqueue_watch {
             Ok(())
         }
 
-        /// Block until either the parent or the child exits.
+        /// Block until the parent exits, the child exits, or this process is
+        /// signalled.
         ///
-        /// No timeout: a signal delivered to this process interrupts `kevent`
-        /// with `EINTR`, and process exits arrive as events, so there is nothing
-        /// to poll for.
+        /// No timeout and no polling: every one of those three is an event.
         pub(super) fn wait_for_first_exit(
             &self,
             parent: Pid,
@@ -261,6 +339,13 @@ mod kqueue_watch {
                 for event in &events[..count] {
                     if event.flags().contains(EventFlag::EV_ERROR) {
                         continue;
+                    }
+                    if matches!(event.filter(), Ok(EventFilter::EVFILT_SIGNAL)) {
+                        let received = super::FORWARDED_SIGNALS
+                            .into_iter()
+                            .find(|sig| *sig as i32 as usize == event.ident())
+                            .unwrap_or(Signal::SIGTERM);
+                        return Ok(Exited::Signalled(received));
                     }
                     if event.ident() == parent_ident {
                         return Ok(Exited::Parent);
@@ -280,7 +365,7 @@ mod pdeathsig_watch {
     use anyhow::{Context, Result};
     use nix::unistd::Pid;
     use std::process::Child;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicI32, Ordering};
     use std::sync::Arc;
 
     impl ParentWatch {
@@ -300,31 +385,41 @@ mod pdeathsig_watch {
             Ok(())
         }
 
-        /// Block until either the parent dies (delivered as SIGTERM by
-        /// `PR_SET_PDEATHSIG`) or the child exits.
+        /// Block until the parent dies (delivered as `SIGTERM` by
+        /// `PR_SET_PDEATHSIG`), this process is signalled, or the child exits.
+        ///
+        /// `PR_SET_PDEATHSIG` delivers an ordinary `SIGTERM`, indistinguishable
+        /// from one a user sent, so the parent's PID is re-checked to report the
+        /// right cause. Both outcomes take the command down; only the message
+        /// differs.
         ///
         /// Polls through `Child::try_wait` rather than calling `waitpid`
         /// directly: `waitpid` reaps the child, after which the `Child::wait` the
         /// caller does to collect the exit status fails with `ECHILD`. Letting
         /// `Child` be the only reaper keeps the status available — it caches it.
-        pub(super) fn wait_for_first_exit(
-            &self,
-            _parent: Pid,
-            child: &mut Child,
-        ) -> Result<Exited> {
-            let parent_died = Arc::new(AtomicBool::new(false));
-            let flag = Arc::clone(&parent_died);
-            let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGTERM])
-                .context("Failed to install SIGTERM handler")?;
+        pub(super) fn wait_for_first_exit(&self, parent: Pid, child: &mut Child) -> Result<Exited> {
+            let received: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
+            let flag = Arc::clone(&received);
+            let mut signals =
+                signal_hook::iterator::Signals::new(super::FORWARDED_SIGNALS.map(|sig| sig as i32))
+                    .context("Failed to install signal handlers")?;
             std::thread::spawn(move || {
-                if signals.forever().next().is_some() {
-                    flag.store(true, Ordering::SeqCst);
+                if let Some(sig) = signals.forever().next() {
+                    flag.store(sig, Ordering::SeqCst);
                 }
             });
 
             loop {
-                if parent_died.load(Ordering::SeqCst) {
-                    return Ok(Exited::Parent);
+                let sig = received.load(Ordering::SeqCst);
+                if sig != 0 {
+                    // Parent gone => this was PR_SET_PDEATHSIG firing.
+                    if nix::unistd::getppid() != parent {
+                        return Ok(Exited::Parent);
+                    }
+                    return Ok(Exited::Signalled(
+                        nix::sys::signal::Signal::try_from(sig)
+                            .unwrap_or(nix::sys::signal::Signal::SIGTERM),
+                    ));
                 }
                 match child.try_wait() {
                     Ok(Some(_)) => return Ok(Exited::Child),

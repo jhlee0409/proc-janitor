@@ -625,6 +625,81 @@ fn test_exec_kills_command_when_parent_dies() {
     );
 }
 
+/// `exec` must take the command down when *it* is told to stop, not only when its
+/// parent dies.
+///
+/// A `kill` aimed at the wrapper (`kill <pid>`, `pkill -f proc-janitor`, a service
+/// manager stopping the unit) used to kill the wrapper alone and leave the command
+/// running with PPID=1 — precisely the state this subcommand exists to prevent.
+/// Here the parent shell stays alive, so nothing but `exec` itself can be
+/// responsible for the cleanup.
+#[test]
+fn test_exec_kills_command_when_signalled_itself() {
+    let home = sandbox();
+    let marker = format!("pjexec_signalled_{}", std::process::id());
+    let binary = binary_path();
+
+    let mut intermediate = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "{} exec -- sh -c 'sleep 30; : {marker}' ; :",
+            binary.display()
+        ))
+        .env("HOME", home.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("Failed to spawn the intermediate shell");
+
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(
+        marker_count(&marker) > 0,
+        "the supervised command never started"
+    );
+
+    // Find the wrapper: the only child of the intermediate shell.
+    let pgrep = Command::new("pgrep")
+        .args(["-P", &intermediate.id().to_string()])
+        .output()
+        .expect("Failed to run pgrep");
+    let wrapper: i32 = String::from_utf8_lossy(&pgrep.stdout)
+        .split_whitespace()
+        .next()
+        .expect("no proc-janitor exec process under the intermediate shell")
+        .parse()
+        .expect("pgrep returned a non-numeric pid");
+
+    // Signal the wrapper only. The parent shell is untouched and still running.
+    unsafe {
+        libc::kill(wrapper, libc::SIGTERM);
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut remaining = marker_count(&marker);
+    while remaining > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        remaining = marker_count(&marker);
+    }
+
+    let parent_alive = unsafe { libc::kill(intermediate.id() as i32, 0) } == 0;
+    kill_marker(&marker);
+    unsafe {
+        libc::kill(intermediate.id() as i32, libc::SIGKILL);
+    }
+    let _ = intermediate.wait();
+
+    assert!(
+        parent_alive,
+        "the test is invalid: the parent shell died, so parent-death cleanup could \
+         explain the result"
+    );
+    assert_eq!(
+        remaining, 0,
+        "the command survived a SIGTERM aimed at `proc-janitor exec` itself: \
+         {remaining} process(es) still matching {marker}"
+    );
+}
+
 /// The complement: while the parent is alive, `exec` must stay out of the way and
 /// pass the command's exit status through unchanged.
 #[test]

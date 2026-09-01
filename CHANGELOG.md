@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-08-30
+
+### Fixed
+- **`exec` now takes the command down when *it* is told to stop, not only when
+  its parent dies.** A signal aimed at the wrapper itself — `kill <pid>`,
+  `pkill -f proc-janitor`, a service manager stopping the unit — killed the
+  wrapper and left the command running with `PPID=1`, precisely the state the
+  subcommand exists to prevent. Reproduced 2/2 on macOS 25.6 before the fix.
+
+  `SIGINT`/`SIGTERM` are now observed rather than fatal: on macOS through
+  `EVFILT_SIGNAL` in the same kqueue that already watches for exits (so it stays
+  event-driven, no polling added), and on Linux through the existing signal
+  thread. The wrapper terminates the command's tree and exits `128 + signal`.
+
+  Two behaviours were explicitly verified not to regress: the child does **not**
+  inherit the ignored dispositions (they are reset to `SIG_DFL` between fork and
+  exec, so the command stays normally killable), and a process-group signal —
+  what Ctrl-C actually sends — still cleans up both, since the child is
+  deliberately left in the terminal's process group.
+
+  Linux additionally reported the wrong cause: `PR_SET_PDEATHSIG` delivers an
+  ordinary `SIGTERM`, so a user's `SIGTERM` was logged as "parent exited". The
+  parent's PID is now re-checked to distinguish the two; both still terminate the
+  command.
+
+  Covered by `test_exec_kills_command_when_signalled_itself`, which keeps the
+  parent shell alive so nothing but the wrapper can be responsible for the
+  cleanup, and which fails against the 0.9.0 behaviour.
+
 ## [0.9.0] - 2026-08-30
 
 Two capability changes — prevention via `exec`, and event-driven reaction in the

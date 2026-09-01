@@ -128,6 +128,12 @@ code is propagated unchanged, so it composes with shell aliases and scripts.
 alias claude='proc-janitor exec -- claude'
 ```
 
+**Termination.** `exec` also takes the command down when it is itself told to
+stop (`kill`, `pkill`, a service manager stopping the unit) — otherwise the very
+orphan it exists to prevent would be left behind. Ctrl-C is unaffected: the child
+stays in the terminal's process group, so the terminal signals both, and the
+command keeps its normal signal dispositions.
+
 **Limitations.** A descendant that calls `setsid()` re-parents itself out of the
 tree and can no longer be reached from the command's PID — that is the case the
 pattern-matching daemon exists to cover, so the two are complementary. Signals
